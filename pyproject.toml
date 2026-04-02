@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hivescope"
+version = "0.1.0"
+description = "Hivescope: E2E testing library for HiveMind protocol"
+readme = "README.md"
+license = {text = "AGPL-3.0"}
+authors = [
+    {name = "JarbasAi", email = "jarbasai@mailfence.com"}
+]
+keywords = ["hivemind", "protocol", "testing", "e2e", "pytest"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Testing",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "hivemind-websocket-client>=1.0",
+    "hivemind-core>=4.0",
+    "pytest>=7.4",
+]
+
+[project.optional-dependencies]
+ovos = [
+    "ovoscope>=0.13",
+    "ovos-core>=0.0.30",
+]
+
+[tool.pytest.ini_options]
+timeout = 30
+markers = [
+    "slow: slow tests that may take longer",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hivescope*"]
