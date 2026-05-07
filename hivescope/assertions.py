@@ -46,11 +46,11 @@ def assert_handshake_complete(
     """
     errors = []
 
-    if satellite.crypto_key is None:
-        errors.append("satellite.crypto_key is None (no crypto negotiated)")
+    if satellite.shim.crypto_key is None:
+        errors.append("satellite.shim.crypto_key is None (no crypto negotiated)")
 
-    if not satellite.handshake_event.is_set():
-        errors.append("satellite.handshake_event not set (handshake not complete)")
+    if not satellite.shim.handshake_event.is_set():
+        errors.append("satellite.shim.handshake_event not set (handshake not complete)")
 
     connected_peers = master.connected_peers()
     if satellite.peer not in connected_peers:
@@ -125,7 +125,8 @@ def assert_encryption_match(
     satellite: SatelliteNode
 ) -> None:
     """
-    Assert that master and satellite have matching encryption settings.
+    Assert that the master-side connection and satellite shim have matching
+    encryption settings after handshake.
 
     Checks:
     - cipher type matches
@@ -135,15 +136,27 @@ def assert_encryption_match(
     """
     errors = []
 
-    if master.cipher != satellite.cipher:
-        errors.append(
-            f"cipher mismatch: master={master.cipher}, satellite={satellite.cipher}"
+    master_conn = next(
+        (c for c in master.hm_protocol.clients.values()
+         if c.peer == satellite.peer),
+        None,
+    )
+    if master_conn is None:
+        raise AssertionError(
+            f"satellite peer '{satellite.peer}' not registered at master; "
+            "cannot compare encryption settings"
         )
 
-    if master.json_encoding != satellite.json_encoding:
+    if master_conn.cipher != satellite.shim.cipher:
         errors.append(
-            f"json_encoding mismatch: master={master.json_encoding}, "
-            f"satellite={satellite.json_encoding}"
+            f"cipher mismatch: master={master_conn.cipher}, "
+            f"satellite={satellite.shim.cipher}"
+        )
+
+    if master_conn.json_encoding != satellite.shim.json_encoding:
+        errors.append(
+            f"json_encoding mismatch: master={master_conn.json_encoding}, "
+            f"satellite={satellite.shim.json_encoding}"
         )
 
     if errors:
