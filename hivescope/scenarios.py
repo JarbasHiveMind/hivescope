@@ -47,6 +47,22 @@ def single_satellite() -> TopologyBuilder:
     return b
 
 
+def admin_satellite() -> TopologyBuilder:
+    """
+    T1 with the satellite granted ``is_admin=True``.
+
+    Use when the test needs to send arbitrary OVOS bus messages from the
+    satellite without hitting the default ACL filter (only authenticated
+    admin satellites can inject arbitrary message types into the master's
+    agent bus).
+    """
+    b = TopologyBuilder()
+    m = b.add_master("M0")
+    m.register_satellite("test-key", password="test-password")
+    b.add_satellite("S0", upstream=m, is_admin=True)
+    return b
+
+
 def three_satellites() -> TopologyBuilder:
     """
     T2 topology: 1 master, 3 satellites.
