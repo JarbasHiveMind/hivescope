@@ -46,7 +46,7 @@ try:
 except ImportError:
     OvoscopeAgentProtocol = None
 
-__version__ = "0.1.0"
+from hivescope.version import __version__
 
 __all__ = [
     # Core topology classes (stable)
