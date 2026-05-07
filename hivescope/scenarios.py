@@ -51,10 +51,10 @@ def admin_satellite() -> TopologyBuilder:
     """
     T1 with the satellite granted ``is_admin=True``.
 
-    Use when the test needs to send arbitrary OVOS bus messages from the
-    satellite without hitting the default ACL filter (only authenticated
-    admin satellites can inject arbitrary message types into the master's
-    agent bus).
+    Admin status lets the satellite use the reserved ``session_id="default"``
+    (normally rejected from non-admin peers); it does NOT bypass the OVOS
+    bus message-type allowlist. To exercise arbitrary message types, pass
+    ``allowed_types=[...]`` when registering instead.
     """
     b = TopologyBuilder()
     m = b.add_master("M0")
