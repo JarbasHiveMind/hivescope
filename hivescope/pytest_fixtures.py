@@ -33,8 +33,8 @@ Or import directly in conftest.py:
 import pytest
 from typing import Optional
 
-from hivemind_test_harness.topology import TopologyBuilder
-from hivemind_test_harness.node import MasterNode, SatelliteNode
+from hivescope.topology import TopologyBuilder
+from hivescope.node import MasterNode, SatelliteNode
 from hivemind_bus_client.identity import NodeIdentity
 
 

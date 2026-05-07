@@ -11,7 +11,7 @@ with detailed failure messages if the check fails.
 
 Usage:
 
-  from hivemind_test_harness.assertions import (
+  from hivescope.assertions import (
       assert_handshake_complete,
       assert_message_routed,
   )
@@ -25,7 +25,7 @@ Usage:
 """
 
 from typing import Optional, Any
-from hivemind_test_harness.node import MasterNode, SatelliteNode
+from hivescope.node import MasterNode, SatelliteNode
 from hivemind_bus_client.message import HiveMessageType
 
 

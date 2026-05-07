@@ -31,19 +31,18 @@ Example:
   b.stop_all()
 """
 
-# Re-export stable classes from hivemind-test-harness
-from hivemind_test_harness.topology import TopologyBuilder
-from hivemind_test_harness.node import MasterNode, SatelliteNode
-from hivemind_test_harness.topology import RelayNode
-from hivemind_test_harness.recorder import MessageRecorder, RecordedMessage
-from hivemind_test_harness.database import InMemoryClientDatabase
-from hivemind_test_harness.plugins.agent import TestAgentProtocol
-from hivemind_test_harness.plugins.binary import TestBinaryProtocol
-from hivemind_test_harness.plugins.network import TestNetworkProtocol
+from hivescope.topology import TopologyBuilder
+from hivescope.node import MasterNode, SatelliteNode
+from hivescope.topology import RelayNode
+from hivescope.recorder import MessageRecorder, RecordedMessage
+from hivescope.database import InMemoryClientDatabase
+from hivescope.plugins.agent import TestAgentProtocol
+from hivescope.plugins.binary import TestBinaryProtocol
+from hivescope.plugins.network import TestNetworkProtocol
 
 # Optional: OvoscopeAgentProtocol requires ovoscope+ovos-core
 try:
-    from hivemind_test_harness.plugins.ovoscope_agent import OvoscopeAgentProtocol
+    from hivescope.plugins.ovoscope_agent import OvoscopeAgentProtocol
 except ImportError:
     OvoscopeAgentProtocol = None
 

@@ -15,7 +15,7 @@ Common scenarios:
 
 Usage:
 
-  from hivemind_test_harness.scenarios import single_satellite
+  from hivescope.scenarios import single_satellite
 
   def test_something():
       b = single_satellite()
@@ -28,8 +28,8 @@ Usage:
 
 from typing import Optional, Dict, Any
 
-from hivemind_test_harness.topology import TopologyBuilder
-from hivemind_test_harness.plugins.agent import TestAgentProtocol
+from hivescope.topology import TopologyBuilder
+from hivescope.plugins.agent import TestAgentProtocol
 
 
 def single_satellite() -> TopologyBuilder:

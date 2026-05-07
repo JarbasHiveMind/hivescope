@@ -23,9 +23,9 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
-    "hivemind-test-harness @ git+https://github.com/JarbasHiveMind/hivemind-test-harness@dev",
     "hivemind-websocket-client>=1.0",
     "hivemind-core>=4.0",
+    "ovos-utils>=0.0.40",
     "pytest>=7.4",
 ]
 
