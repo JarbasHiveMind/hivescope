@@ -23,7 +23,7 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
-    "hivemind-bus-client>=0.4.4",
+    "hivemind-bus-client>=0.7.0a2",
     "hivemind-core>=4.0",
     "ovos-utils>=0.0.40",
     "pytest>=7.4",
