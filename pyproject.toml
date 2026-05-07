@@ -27,6 +27,7 @@ dependencies = [
     "hivemind-core>=4.0",
     "ovos-utils>=0.0.40",
     "pytest>=7.4",
+    "websockets>=11",
 ]
 
 [project.optional-dependencies]
