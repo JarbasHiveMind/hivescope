@@ -64,9 +64,13 @@ class TestNetworkProtocol(NetworkProtocol):
             is_admin=db_client.is_admin,
             can_escalate=db_client.can_escalate,
             can_propagate=db_client.can_propagate,
-            msg_blacklist=list(db_client.message_blacklist or []),
-            skill_blacklist=list(db_client.skill_blacklist or []),
-            intent_blacklist=list(db_client.intent_blacklist or []),
+            # HiveMindClientConnection no longer carries skill_blacklist
+            # / intent_blacklist — those flow through the policy chain
+            # onto message.context["session"] (see HiveMind-core#85).
+            # msg_blacklist is the only connection-level cache that
+            # remains, populated below by handle_new_client from the
+            # client's metadata so the outbound send() filter has it
+            # from t=0.
             allowed_types=list(db_client.allowed_types or []),
             node_type=HiveMindNodeType.NODE,
         )
