@@ -18,7 +18,6 @@ All admission control flows through the ``PolicyChain``.
 
 import time
 
-from hivemind_bus_client.message import HiveMessage, HiveMessageType
 from ovos_bus_client.message import Message
 
 from hivescope import TopologyBuilder
@@ -41,10 +40,7 @@ def test_allowed_types_denial():
     b.start_all()
     try:
         s = b.get_satellite("S0")
-        s.send(HiveMessage(
-            HiveMessageType.BUS,
-            payload=Message("recognizer_loop:utterance", {"utterances": ["what is the weather"]}),
-        ))
+        s.send(Message("recognizer_loop:utterance", {"utterances": ["what is the weather"]}))
 
         time.sleep(0.2)  # give any errant dispatch a window to land
         assert_policy_denied(
@@ -76,10 +72,7 @@ def test_skill_blacklist_injection():
         seen = []
         m.agent_protocol.bus.on("recognizer_loop:utterance", seen.append)
 
-        s.send(HiveMessage(
-            HiveMessageType.BUS,
-            payload=Message("recognizer_loop:utterance", {"utterances": ["what is the weather"]}),
-        ))
+        s.send(Message("recognizer_loop:utterance", {"utterances": ["what is the weather"]}))
 
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline and not seen:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hivescope"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Hivescope: E2E testing library for HiveMind protocol"
 readme = "README.md"
 license = {text = "AGPL-3.0"}
@@ -41,6 +41,9 @@ timeout = 30
 markers = [
     "slow: slow tests that may take longer",
 ]
+
+[tool.setuptools.dynamic]
+version = {attr = "hivescope.version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]
