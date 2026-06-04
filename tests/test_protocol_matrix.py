@@ -21,6 +21,22 @@ ACL enforcement:
 """
 
 import pytest
+import importlib.util
+
+# ACL tests exercise the policy admission chain (HiveMind-core#89 MessageTypeACLPolicy,
+# hivemind-ovos-agent-plugin#3 OVOSAgentPolicy). Skip them when those are not in the
+# installed packages so the suite is green against released deps; they run
+# automatically once the policy packages are installed.
+_HAS_POLICY_CHAIN = importlib.util.find_spec("hivemind_core.policy") is not None
+_HAS_OVOS_POLICY = importlib.util.find_spec("hivemind_ovos_agent_plugin") is not None
+_requires_policy_chain = pytest.mark.skipif(
+    not _HAS_POLICY_CHAIN,
+    reason="policy admission chain (HiveMind-core#89) not in installed hivemind-core",
+)
+_requires_ovos_policy = pytest.mark.skipif(
+    not (_HAS_POLICY_CHAIN and _HAS_OVOS_POLICY),
+    reason="OVOSAgentPolicy (hivemind-ovos-agent-plugin#3) + core#89 not installed",
+)
 
 from hivemind_bus_client.message import HiveMessage, HiveMessageType
 from ovos_bus_client.message import Message
@@ -143,6 +159,7 @@ def test_broadcast_delivered():
         b.stop_all()
 
 
+@_requires_policy_chain
 def test_broadcast_blocked_by_acl():
     b = TopologyBuilder()
     m = b.add_master("M0")
@@ -163,6 +180,7 @@ def test_broadcast_blocked_by_acl():
 # BUS ACL — per-client message-type allowlist (MessageTypeACLPolicy)
 # ─────────────────────────────────────────────────────────────────────────────
 
+@_requires_policy_chain
 def test_bus_acl_allowed_type_reaches_master():
     """A satellite with ``allowed_types=["recognizer_loop:utterance"]`` can inject
     that message type onto the master bus.  Proves that the ACL whitelist is live
@@ -197,6 +215,7 @@ def test_bus_acl_allowed_type_reaches_master():
         b.stop_all()
 
 
+@_requires_policy_chain
 def test_bus_acl_denied_type_does_not_reach_master():
     """A satellite WITHOUT any ``allowed_types`` (deny-all by default) cannot
     inject a BUS message onto the master bus.  The message must be silently
@@ -232,6 +251,7 @@ def test_bus_acl_denied_type_does_not_reach_master():
 # ACL — policy-model paths (MessageTypeACLPolicy + OVOSAgentPolicy)
 # ─────────────────────────────────────────────────────────────────────────────
 
+@_requires_policy_chain
 def test_acl_allowed_types_restricted_satellite_utterance_denied():
     """Path (a): allowed_types-restricted satellite's utterance is denied.
 
@@ -259,6 +279,7 @@ def test_acl_allowed_types_restricted_satellite_utterance_denied():
         b.stop_all()
 
 
+@_requires_ovos_policy
 def test_acl_skill_blacklisted_satellite_utterance_delivered_with_injection():
     """Path (b): skill-blacklisted satellite's utterance is delivered WITH
     session.blacklisted_skills injected by OVOSAgentPolicy.
