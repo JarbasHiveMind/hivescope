@@ -91,6 +91,8 @@ from hivescope.assertions import (
     assert_client_registered,
     assert_client_not_registered,
     assert_acl_enforced,
+    assert_policy_denied,
+    assert_session_blacklists_injected,
     # type-specific ready helpers
     assert_hello_received,
     assert_bus_message_routed,
@@ -144,6 +146,8 @@ __all__ = [
     "assert_client_registered",
     "assert_client_not_registered",
     "assert_acl_enforced",
+    "assert_policy_denied",
+    "assert_session_blacklists_injected",
     "assert_hello_received",
     "assert_bus_message_routed",
     "assert_shared_bus_received",
