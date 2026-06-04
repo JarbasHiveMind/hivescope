@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2a1](https://github.com/JarbasHiveMind/hivescope/tree/0.2.2a1) (2026-06-04)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.2.1a1...0.2.2a1)
+
+**Merged pull requests:**
+
+- fix: dynamic version from version.py + CodeRabbit follow-ups \(PR\#7\) [\#10](https://github.com/JarbasHiveMind/hivescope/pull/10) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.2.1a1](https://github.com/JarbasHiveMind/hivescope/tree/0.2.1a1) (2026-06-04)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.2.0a2...0.2.1a1)
