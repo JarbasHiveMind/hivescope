@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.0a1](https://github.com/JarbasHiveMind/hivescope/tree/0.2.0a1) (2026-06-04)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.1.0a2...0.2.0a1)
+
+**Merged pull requests:**
+
+- feat: full protocol-matrix coverage — 14 HiveMessageType helpers + tests [\#5](https://github.com/JarbasHiveMind/hivescope/pull/5) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.1.0a2](https://github.com/JarbasHiveMind/hivescope/tree/0.1.0a2) (2026-05-13)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/e212e8727f6cadccfc1711d294cacc70975f6efe...0.1.0a2)
