@@ -180,8 +180,7 @@ def with_acl_enforcement() -> TopologyBuilder:
       ``AddBlacklistedSkill`` mutation so the OVOS pipeline cannot route
       them to the blacklisted skill.
 
-    The ``msg_blacklist`` / static-blacklist model has been removed; all
-    admission control flows through the ``PolicyChain``
+    Admission control flows through the ``PolicyChain``
     (``MessageTypeACLPolicy`` force-prepended, then ``OVOSAgentPolicy``
     for the skill/intent injection).
     """

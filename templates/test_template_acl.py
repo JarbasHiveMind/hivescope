@@ -13,8 +13,7 @@ Demonstrates both policy-admission enforcement paths:
    with ``session.blacklisted_skills = ["skill-weather"]`` injected by
    ``OVOSAgentPolicy`` + ``AddBlacklistedSkill``.
 
-The old ``msg_blacklist`` / static-blacklist model is gone; all admission
-control flows through the ``PolicyChain``.
+All admission control flows through the ``PolicyChain``.
 """
 
 import time
