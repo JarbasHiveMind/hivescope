@@ -159,6 +159,75 @@ def test_broadcast_blocked_by_acl():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BUS ACL — per-client message-type allowlist (MessageTypeACLPolicy)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_bus_acl_allowed_type_reaches_master():
+    """A satellite with ``allowed_types=["recognizer_loop:utterance"]`` can inject
+    that message type onto the master bus.  Proves that the ACL whitelist is live
+    (not vacuously deny-all), i.e. the DB entry carrying ``allowed_types`` is
+    reachable via ``resolve_user`` on the active connection.
+    """
+    import time
+
+    b = TopologyBuilder()
+    m = b.add_master("M0")
+    b.add_satellite("S0", upstream=m, allowed_types=["recognizer_loop:utterance"])
+    b.start_all()
+    try:
+        s = b.get_satellite("S0")
+        seen = []
+        m.agent_protocol.bus.on("recognizer_loop:utterance", seen.append)
+
+        s.send(HiveMessage(
+            HiveMessageType.BUS,
+            payload=Message("recognizer_loop:utterance", {"utterances": ["hello"]}),
+        ))
+
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not seen:
+            time.sleep(0.02)
+
+        assert seen, (
+            "recognizer_loop:utterance did NOT reach the master bus — "
+            "allowed_types ACL is blocking an explicitly-allowed type"
+        )
+    finally:
+        b.stop_all()
+
+
+def test_bus_acl_denied_type_does_not_reach_master():
+    """A satellite WITHOUT any ``allowed_types`` (deny-all by default) cannot
+    inject a BUS message onto the master bus.  The message must be silently
+    dropped by ``MessageTypeACLPolicy`` — not raise, not disconnect.
+    """
+    import time
+
+    b = TopologyBuilder()
+    m = b.add_master("M0")
+    # No allowed_types → deny-by-default whitelist model → all types blocked.
+    b.add_satellite("S0", upstream=m)
+    b.start_all()
+    try:
+        s = b.get_satellite("S0")
+        seen = []
+        m.agent_protocol.bus.on("recognizer_loop:utterance", seen.append)
+
+        s.send(HiveMessage(
+            HiveMessageType.BUS,
+            payload=Message("recognizer_loop:utterance", {"utterances": ["hello"]}),
+        ))
+
+        time.sleep(0.2)  # give any errant dispatch a window to land
+        assert not seen, (
+            "recognizer_loop:utterance reached the master bus — "
+            "MessageTypeACLPolicy did not enforce the deny-all default"
+        )
+    finally:
+        b.stop_all()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BINARY
 # ─────────────────────────────────────────────────────────────────────────────
 
