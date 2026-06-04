@@ -161,43 +161,60 @@ def star_topology(num_satellites: int = 5) -> TopologyBuilder:
 
 def with_acl_enforcement() -> TopologyBuilder:
     """
-    Topology with fine-grained ACL rules for testing permission enforcement.
+    Topology pre-configured for policy-admission ACL testing.
 
-    Includes:
-    - Admin satellite with full permissions
-    - Restricted satellite with message type blacklist
-    - Restricted satellite with skill blacklist
+    Three satellites covering the two policy-layer enforcement paths:
+
+    - **S_ADMIN** — admin satellite granted a broad ``allowed_types``
+      whitelist (``recognizer_loop:utterance`` + ``speak``).  Represents a
+      fully-trusted peer.
+    - **S_RESTRICTED_TYPE** — non-admin satellite whose ``allowed_types``
+      excludes ``recognizer_loop:utterance``.  Any utterance it injects is
+      denied by ``MessageTypeACLPolicy`` with code
+      ``ACL_DISALLOWED_TYPE`` and never reaches the agent bus.
+    - **S_RESTRICTED_SKILL** — non-admin satellite allowed to inject
+      ``recognizer_loop:utterance`` but registered with
+      ``skill_blacklist=["skill-weather"]``.  Its utterances pass the type
+      gate and reach the agent bus, but ``OVOSAgentPolicy`` injects
+      ``session.blacklisted_skills = ["skill-weather"]`` via an
+      ``AddBlacklistedSkill`` mutation so the OVOS pipeline cannot route
+      them to the blacklisted skill.
+
+    The ``msg_blacklist`` / static-blacklist model has been removed; all
+    admission control flows through the ``PolicyChain``
+    (``MessageTypeACLPolicy`` force-prepended, then ``OVOSAgentPolicy``
+    for the skill/intent injection).
     """
     b = TopologyBuilder()
     m = b.add_master("M0")
 
-    # Admin satellite (can do everything)
-    m.register_satellite(
-        "admin-key",
-        password="admin-password",
+    # Admin satellite — full utterance + speak access
+    b.add_satellite(
+        "S_ADMIN",
+        upstream=m,
         is_admin=True,
         can_propagate=True,
-        can_escalate=True
+        can_escalate=True,
+        allowed_types=["recognizer_loop:utterance", "speak"],
     )
-    b.add_satellite("S_ADMIN", upstream=m)
 
-    # Restricted satellite (message type blacklist)
-    m.register_satellite(
-        "restricted-msg-key",
-        password="restricted-msg-password",
+    # Type-restricted satellite — speak only, utterance is DENIED
+    b.add_satellite(
+        "S_RESTRICTED_TYPE",
+        upstream=m,
         is_admin=False,
-        msg_blacklist=["speak", "notification"]
+        allowed_types=["speak"],          # excludes recognizer_loop:utterance
     )
-    b.add_satellite("S_RESTRICTED_MSG", upstream=m)
 
-    # Restricted satellite (skill blacklist)
-    m.register_satellite(
-        "restricted-skill-key",
-        password="restricted-skill-password",
+    # Skill-blacklisted satellite — utterance allowed, but OVOSAgentPolicy
+    # injects session.blacklisted_skills=["skill-weather"] on each message
+    b.add_satellite(
+        "S_RESTRICTED_SKILL",
+        upstream=m,
         is_admin=False,
-        skill_blacklist=["mycroft.volume.skill"]
+        allowed_types=["recognizer_loop:utterance"],
+        skill_blacklist=["skill-weather"],
     )
-    b.add_satellite("S_RESTRICTED_SKILL", upstream=m)
 
     return b
 

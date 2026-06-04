@@ -40,6 +40,10 @@ from typing import Any, List, Optional
 from hivescope.node import MasterNode, SatelliteNode
 from hivemind_bus_client.message import HiveMessageType
 
+# Policy-model deny codes (stable strings; mirrored from hivemind-plugin-manager)
+ACL_DISALLOWED_TYPE = "acl_disallowed_type"
+SESSION_ID_DEFAULT_FORBIDDEN = "session_id_default_forbidden"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -322,7 +326,7 @@ def assert_binary_delivered(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ACL (cross-type)
+# ACL / policy-admission helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def assert_acl_enforced(
@@ -331,33 +335,195 @@ def assert_acl_enforced(
     msg_type: str,
     allowed: bool = False,
 ) -> None:
-    """Assert ACL enforcement for *msg_type* on *satellite*.
+    """Assert policy-admission enforcement for *msg_type* on *satellite*.
 
-    When ``allowed=False`` (default): verifies the message type was NOT
-    forwarded beyond the satellite (i.e., not found in master's recorder as
-    forwarded traffic).
+    When ``allowed=False`` (default): verifies that the satellite received a
+    ``hive.policy.denied`` response (meaning ``MessageTypeACLPolicy`` denied
+    the message) and that no ``bus_inject`` record for *msg_type* appears at
+    master (the message was never forwarded to the OVOS bus).
 
-    When ``allowed=True``: verifies the message WAS recorded at master.
+    When ``allowed=True``: verifies the message WAS recorded at master's
+    ``bus_inject`` level (the injection hook was reached).
 
-    Note: full ACL enforcement verification depends on which message type is
-    tested (broadcast, propagate, escalate each have distinct ACL paths).
-    For fine-grained ACL, prefer the type-specific helpers above.
+    For the policy model (``MessageTypeACLPolicy`` + ``OVOSAgentPolicy``):
+
+    - A satellite whose ``allowed_types`` excludes ``msg_type`` will be denied
+      with code ``ACL_DISALLOWED_TYPE``; use ``allowed=False`` (default).
+    - A satellite whose ``allowed_types`` includes ``msg_type`` will be allowed;
+      use ``allowed=True``.
+
+    For richer deny-code or session-mutation assertions, use
+    :func:`assert_policy_denied` and :func:`assert_session_blacklists_injected`
+    directly.
+
+    Note: ``bus_inject`` records are created by the harness instrumentation
+    hook on ``handle_inject_agent_msg`` — they exist whether or not the policy
+    subsequently allowed the message.  The ``hive.policy.denied`` signal at the
+    satellite is the canonical "was denied" indicator.
     """
-    matches = _find(master.recorder, msg_type, direction="in")
+    # A policy-denied message causes the master to send hive.policy.denied
+    # back to the satellite (recorded as inbound at the satellite).
+    policy_denied_at_sat = [
+        r for r in satellite.recorder.records
+        if r.direction == "in" and r.msg_type == "bus"
+    ]
+    # Look deeper: check inner payload msg_type for hive.policy.denied
+    denied_responses = []
+    for r in policy_denied_at_sat:
+        payload = r.payload if isinstance(r.payload, dict) else {}
+        # Satellite recorder stores HiveMessage._payload for BUS messages:
+        # {"type": <inner msg_type>, "data": {...}, "context": {...}}
+        if payload.get("type") == "hive.policy.denied":
+            denied_responses.append(r)
+
     if allowed:
-        if not matches:
+        if denied_responses:
             raise AssertionError(
-                f"ACL: expected '{msg_type}' to be allowed and reach master, "
-                f"but master recorder shows no such message.\n"
-                f"All records: {master.recorder.records}"
+                f"ACL: expected '{msg_type}' to be allowed, but satellite received "
+                f"{len(denied_responses)} hive.policy.denied response(s).\n"
+                f"Denied responses: {denied_responses}"
             )
     else:
-        if matches:
+        if not denied_responses:
             raise AssertionError(
                 f"ACL violation: '{msg_type}' was NOT blocked — "
-                f"{len(matches)} message(s) reached master.\n"
-                f"Records: {matches}"
+                f"satellite received no hive.policy.denied response.\n"
+                f"Inbound records at satellite: {satellite.recorder.records}"
             )
+
+
+def assert_policy_denied(
+    master: MasterNode,
+    satellite: SatelliteNode,
+    msg_type: str,
+    deny_code: Optional[str] = None,
+) -> None:
+    """Assert that *msg_type* sent by *satellite* was denied by the policy chain.
+
+    Verifies that the satellite received a ``hive.policy.denied`` response
+    from the master.  If *deny_code* is given, also checks that the denial
+    carries that specific stable code (e.g. ``"acl_disallowed_type"``).
+
+    Args:
+        master:     The master node (unused in the check, kept for signature
+                    parity with other helpers).
+        satellite:  The satellite that sent the message.
+        msg_type:   The OVOS message type that should have been denied
+                    (used only for the error message; not matched in the
+                    payload since deny responses don't echo the type).
+        deny_code:  Optional stable deny code to verify.  If ``None``, any
+                    ``hive.policy.denied`` response satisfies the assertion.
+    """
+    # The satellite should have received a HiveMessage whose inner BUS payload
+    # has msg_type "hive.policy.denied".  The recorder stores the raw payload
+    # dict for inbound "bus" records.
+    inbound_bus = [
+        r for r in satellite.recorder.records
+        if r.direction == "in" and r.msg_type == "bus"
+    ]
+
+    denied_responses = []
+    for r in inbound_bus:
+        payload = r.payload if isinstance(r.payload, dict) else {}
+        # Satellite recorder stores HiveMessage._payload for BUS messages:
+        # {"type": <inner msg_type>, "data": {...}, "context": {...}}
+        if payload.get("type") == "hive.policy.denied":
+            denied_responses.append((r, payload))
+
+    if not denied_responses:
+        raise AssertionError(
+            f"assert_policy_denied: no hive.policy.denied response received "
+            f"at satellite for '{msg_type}'.\n"
+            f"Inbound records: {inbound_bus}"
+        )
+
+    if deny_code is not None:
+        found_code = False
+        for _, payload in denied_responses:
+            # HiveMessage._payload["data"] holds the Mycroft Message's data dict
+            data = payload.get("data", {})
+            if str(data.get("code", "")) == deny_code:
+                found_code = True
+                break
+        if not found_code:
+            actual_codes = [p.get("data", {}).get("code") for _, p in denied_responses]
+            raise AssertionError(
+                f"assert_policy_denied: satellite received hive.policy.denied "
+                f"but not with code={deny_code!r}.\n"
+                f"Actual codes seen: {actual_codes}"
+            )
+
+
+def assert_session_blacklists_injected(
+    master: MasterNode,
+    satellite: SatelliteNode,
+    msg_type: str,
+    expected_skills: Optional[List[str]] = None,
+    expected_intents: Optional[List[str]] = None,
+) -> None:
+    """Assert that the policy chain injected skill/intent blacklists into the
+    session of a bus-injected message.
+
+    This asserts the ``OVOSAgentPolicy`` + ``AddBlacklistedSkill`` /
+    ``AddBlacklistedIntent`` mutation path: the message reached the agent bus
+    (was allowed by ``MessageTypeACLPolicy``) AND its
+    ``context["session"]["blacklisted_skills"]`` / ``["blacklisted_intents"]``
+    contain the expected values.
+
+    Checks the ``bus_inject`` records at *master* for the first *msg_type*
+    message and inspects its serialised ``context.session``.
+
+    Args:
+        master:            The master node.
+        satellite:         The satellite that sent the message (unused currently,
+                           kept for signature parity).
+        msg_type:          The OVOS message type that was allowed.
+        expected_skills:   Skills that must appear in
+                           ``context["session"]["blacklisted_skills"]``.
+        expected_intents:  Intents that must appear in
+                           ``context["session"]["blacklisted_intents"]``.
+    """
+    bus_injected = [
+        r for r in master.recorder.records
+        if r.direction == "bus_inject" and r.msg_type == msg_type
+    ]
+    if not bus_injected:
+        raise AssertionError(
+            f"assert_session_blacklists_injected: no bus_inject record for "
+            f"'{msg_type}' at master — the message was not forwarded to the bus.\n"
+            f"All records: {master.recorder.records}"
+        )
+
+    record = bus_injected[0]
+    # payload is a Message instance for bus_inject records (see _recording_inject)
+    message = record.payload
+    errors: List[str] = []
+
+    session = {}
+    if hasattr(message, "context") and isinstance(message.context, dict):
+        session = message.context.get("session") or {}
+
+    if expected_skills:
+        actual_skills = list(session.get("blacklisted_skills") or [])
+        missing = [s for s in expected_skills if s not in actual_skills]
+        if missing:
+            errors.append(
+                f"blacklisted_skills missing {missing}; actual={actual_skills}"
+            )
+
+    if expected_intents:
+        actual_intents = list(session.get("blacklisted_intents") or [])
+        missing = [i for i in expected_intents if i not in actual_intents]
+        if missing:
+            errors.append(
+                f"blacklisted_intents missing {missing}; actual={actual_intents}"
+            )
+
+    if errors:
+        raise AssertionError(
+            "assert_session_blacklists_injected: session mutation missing:\n  "
+            + "\n  ".join(errors)
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

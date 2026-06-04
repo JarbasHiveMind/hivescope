@@ -49,6 +49,7 @@ from hivescope.assertions import (
     assert_rendezvous_handled,
     assert_thirdparty_passed,
 )
+from hivescope.assertions import assert_policy_denied, assert_session_blacklists_injected
 from hivescope.scenarios import single_satellite, three_satellites, with_relay
 
 
@@ -222,6 +223,96 @@ def test_bus_acl_denied_type_does_not_reach_master():
         assert not seen, (
             "recognizer_loop:utterance reached the master bus — "
             "MessageTypeACLPolicy did not enforce the deny-all default"
+        )
+    finally:
+        b.stop_all()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ACL — policy-model paths (MessageTypeACLPolicy + OVOSAgentPolicy)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_acl_allowed_types_restricted_satellite_utterance_denied():
+    """Path (a): allowed_types-restricted satellite's utterance is denied.
+
+    A satellite whose ``allowed_types`` excludes ``recognizer_loop:utterance``
+    must have its utterance blocked by ``MessageTypeACLPolicy`` with code
+    ``acl_disallowed_type``.  The message must never reach the agent bus.
+    """
+    import time
+
+    b = TopologyBuilder()
+    m = b.add_master("M0")
+    # speak only → recognizer_loop:utterance excluded from allowed_types
+    b.add_satellite("S0", upstream=m, allowed_types=["speak"])
+    b.start_all()
+    try:
+        s = b.get_satellite("S0")
+        s.send(HiveMessage(
+            HiveMessageType.BUS,
+            payload=Message("recognizer_loop:utterance", {"utterances": ["what is the weather"]}),
+        ))
+        time.sleep(0.2)
+        assert_policy_denied(m, s, msg_type="recognizer_loop:utterance",
+                             deny_code="acl_disallowed_type")
+    finally:
+        b.stop_all()
+
+
+def test_acl_skill_blacklisted_satellite_utterance_delivered_with_injection():
+    """Path (b): skill-blacklisted satellite's utterance is delivered WITH
+    session.blacklisted_skills injected by OVOSAgentPolicy.
+
+    Wire ``OVOSAgentPolicy`` explicitly into the master's policy chain
+    (normally it is loaded via the ``hivemind.policy`` entry-point group;
+    here we inject it directly so the test is hermetic).  The satellite's
+    utterance must reach the agent bus AND the bus-inject record's session
+    must contain ``blacklisted_skills=["skill-weather"]``.
+    """
+    import time
+    from hivemind_core.policy import MessageTypeACLPolicy, PolicyChain
+    from hivemind_ovos_agent_plugin.policy import OVOSAgentPolicy
+
+    b = TopologyBuilder()
+    m = b.add_master("M0")
+    b.add_satellite(
+        "S0",
+        upstream=m,
+        allowed_types=["recognizer_loop:utterance"],
+        skill_blacklist=["skill-weather"],
+    )
+
+    # Inject OVOSAgentPolicy after add_master (policy_chain already built in
+    # __post_init__); replace it with a chain that includes both policies.
+    m.hm_protocol.policy_chain = PolicyChain(
+        policies=[
+            MessageTypeACLPolicy(hm_protocol=m.hm_protocol),
+            OVOSAgentPolicy(hm_protocol=m.hm_protocol),
+        ],
+        _optional=[False, False],
+    )
+
+    b.start_all()
+    try:
+        s = b.get_satellite("S0")
+        seen = []
+        m.agent_protocol.bus.on("recognizer_loop:utterance", seen.append)
+
+        s.send(HiveMessage(
+            HiveMessageType.BUS,
+            payload=Message("recognizer_loop:utterance", {"utterances": ["what is the weather"]}),
+        ))
+
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not seen:
+            time.sleep(0.02)
+
+        assert seen, "utterance did not reach the agent bus at all"
+
+        assert_session_blacklists_injected(
+            m, s,
+            msg_type="recognizer_loop:utterance",
+            expected_skills=["skill-weather"],
         )
     finally:
         b.stop_all()
