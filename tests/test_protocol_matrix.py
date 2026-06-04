@@ -268,10 +268,7 @@ def test_acl_allowed_types_restricted_satellite_utterance_denied():
     b.start_all()
     try:
         s = b.get_satellite("S0")
-        s.send(HiveMessage(
-            HiveMessageType.BUS,
-            payload=Message("recognizer_loop:utterance", {"utterances": ["what is the weather"]}),
-        ))
+        s.send(Message("recognizer_loop:utterance", {"utterances": ["what is the weather"]}))
         time.sleep(0.2)
         assert_policy_denied(m, s, msg_type="recognizer_loop:utterance",
                              deny_code="acl_disallowed_type")
@@ -319,10 +316,7 @@ def test_acl_skill_blacklisted_satellite_utterance_delivered_with_injection():
         seen = []
         m.agent_protocol.bus.on("recognizer_loop:utterance", seen.append)
 
-        s.send(HiveMessage(
-            HiveMessageType.BUS,
-            payload=Message("recognizer_loop:utterance", {"utterances": ["what is the weather"]}),
-        ))
+        s.send(Message("recognizer_loop:utterance", {"utterances": ["what is the weather"]}))
 
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline and not seen:

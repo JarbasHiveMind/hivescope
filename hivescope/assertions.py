@@ -475,26 +475,29 @@ def assert_session_blacklists_injected(
 
     Args:
         master:            The master node.
-        satellite:         The satellite that sent the message (unused currently,
-                           kept for signature parity).
+        satellite:         The satellite that sent the message; its ``peer`` is
+                           used to filter bus_inject records so only records from
+                           this satellite are inspected.
         msg_type:          The OVOS message type that was allowed.
         expected_skills:   Skills that must appear in
                            ``context["session"]["blacklisted_skills"]``.
         expected_intents:  Intents that must appear in
                            ``context["session"]["blacklisted_intents"]``.
     """
+    peer = satellite.peer
     bus_injected = [
         r for r in master.recorder.records
         if r.direction == "bus_inject" and r.msg_type == msg_type
+        and (peer is None or r.peer == peer)
     ]
     if not bus_injected:
         raise AssertionError(
             f"assert_session_blacklists_injected: no bus_inject record for "
-            f"'{msg_type}' at master — the message was not forwarded to the bus.\n"
+            f"'{msg_type}' at master (peer={peer!r}) — the message was not forwarded to the bus.\n"
             f"All records: {master.recorder.records}"
         )
 
-    record = bus_injected[0]
+    record = bus_injected[-1]
     # payload is a Message instance for bus_inject records (see _recording_inject)
     message = record.payload
     errors: List[str] = []
