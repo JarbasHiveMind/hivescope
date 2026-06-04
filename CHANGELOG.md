@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.1a1](https://github.com/JarbasHiveMind/hivescope/tree/0.2.1a1) (2026-06-04)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.2.0a2...0.2.1a1)
+
+**Merged pull requests:**
+
+- fix: per-client ACL \(allowed\_types\) now resolves in the harness [\#7](https://github.com/JarbasHiveMind/hivescope/pull/7) ([JarbasAl](https://github.com/JarbasAl))
+
+## [0.2.0a2](https://github.com/JarbasHiveMind/hivescope/tree/0.2.0a2) (2026-06-04)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.2.0a1...0.2.0a2)
+
 ## [0.2.0a1](https://github.com/JarbasHiveMind/hivescope/tree/0.2.0a1) (2026-06-04)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.1.0a2...0.2.0a1)
