@@ -64,9 +64,6 @@ class TestNetworkProtocol(NetworkProtocol):
             is_admin=db_client.is_admin,
             can_escalate=db_client.can_escalate,
             can_propagate=db_client.can_propagate,
-            msg_blacklist=list(getattr(db_client, "message_blacklist", None) or []),
-            skill_blacklist=list(getattr(db_client, "skill_blacklist", None) or []),
-            intent_blacklist=list(getattr(db_client, "intent_blacklist", None) or []),
             allowed_types=list(db_client.allowed_types or []),
             node_type=HiveMindNodeType.NODE,
         )
