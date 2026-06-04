@@ -103,6 +103,15 @@ from hivescope.assertions import (
     assert_escalate_delivered,
     assert_intercom_delivered,
     assert_binary_delivered,
+    # OVOS-BRIDGE-1 / SESSION-1 conformance helpers
+    assert_msg1_envelope,
+    assert_source_stamped,
+    assert_destination_routed,
+    assert_session_inbound_preserved,
+    assert_session_outbound_preserved,
+    assert_fifo_order,
+    assert_session_propagated_unchanged,
+    assert_source_hidden,
 )
 
 # Scenario builders — re-exported for convenience
@@ -157,6 +166,15 @@ __all__ = [
     "assert_escalate_delivered",
     "assert_intercom_delivered",
     "assert_binary_delivered",
+    # OVOS-BRIDGE-1 / SESSION-1 conformance helpers
+    "assert_msg1_envelope",
+    "assert_source_stamped",
+    "assert_destination_routed",
+    "assert_session_inbound_preserved",
+    "assert_session_outbound_preserved",
+    "assert_fifo_order",
+    "assert_session_propagated_unchanged",
+    "assert_source_hidden",
     # --- scenario builders ---
     "single_satellite",
     "admin_satellite",
