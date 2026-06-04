@@ -339,7 +339,7 @@ class SatelliteNode:
                                site_id=self.identity.site_id or "unknown")
                 message.context["session"] = sess.serialize()
             message = HiveMessage(HiveMessageType.BUS, payload=message)
-        self.recorder.record("out", message.msg_type, message.payload, "master")
+        self.recorder.record("out", message.msg_type, message._payload, "master")
         if self._master is None or self._connection is None:
             raise RuntimeError(
                 f"Satellite {self.name!r} is not connected to any master."
@@ -365,7 +365,7 @@ class SatelliteNode:
             traceback.print_exc()
             return
 
-        self.recorder.record("in", message.msg_type, message.payload,
+        self.recorder.record("in", message.msg_type, message._payload,
                              self._connection.peer if self._connection else "master")
 
         # Dispatch through the slave protocol's registered handlers
@@ -421,7 +421,7 @@ def _instrument_master(hm_proto: HiveMindListenerProtocol,
     _orig_handle = hm_proto.handle_message
 
     def _recording_handle(message: HiveMessage, client: HiveMindClientConnection):
-        recorder.record("in", message.msg_type, message.payload, client.peer)
+        recorder.record("in", message.msg_type, message._payload, client.peer)
         _orig_handle(message, client)
 
     hm_proto.handle_message = _recording_handle

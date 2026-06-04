@@ -28,6 +28,11 @@ class MessageRecorder:
         self._waiters: Dict[str, List[threading.Event]] = defaultdict(list)
         self._lock = threading.Lock()
 
+    @property
+    def messages(self) -> List[RecordedMessage]:
+        """Alias for ``records`` — preferred name in assertion helpers and templates."""
+        return self.records
+
     def record(self, direction: str, msg_type: str, payload: Any, peer: str):
         entry = RecordedMessage(direction=direction, msg_type=msg_type,
                                 payload=payload, peer=peer)

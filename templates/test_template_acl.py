@@ -20,10 +20,9 @@ def test_restricted_satellite_cannot_broadcast():
         s0 = b.get_satellite("S0")
         s1 = b.get_satellite("S1")
 
-        msg = HiveMessage(
-            HiveMessageType.BROADCAST,
-            payload=Message("speak", {"utterance": "hello world"}),
-        )
+        # BROADCAST payload must be a HiveMessage wrapping the inner message
+        inner = HiveMessage(HiveMessageType.BUS, payload=Message("speak", {"utterance": "hello world"}))
+        msg = HiveMessage(HiveMessageType.BROADCAST, payload=inner)
         s0.send(msg)
 
         # S1 must not receive the broadcast because S0 lacks the permission.

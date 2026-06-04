@@ -6,29 +6,58 @@ protocol implementations. Provides stable APIs for topology simulation,
 message routing verification, and protocol-level assertions.
 
 Public API — stable across versions:
-  - TopologyBuilder: Builder for test network topologies
-  - MasterNode, SatelliteNode, RelayNode: Network node types
-  - TestAgentProtocol: Agent protocol backed by FakeBus (fast, deterministic)
-  - OvoscopeAgentProtocol: Agent protocol backed by MiniCroft (realistic, slow)
-  - TestBinaryProtocol: Binary data handler stub for testing
-  - TestNetworkProtocol: Network protocol stub for in-process testing
-  - MessageRecorder, RecordedMessage: Message recording and inspection
-  - InMemoryClientDatabase: In-memory credential store for testing
 
-Fixtures & Helpers (use via conftest.py):
-  - pytest fixtures: topology, master_node, satellite_node, etc.
-  - Assertion helpers: assert_handshake_complete(), assert_message_routed(), etc.
-  - Preset topologies: single_satellite(), three_satellites(), with_relay(), etc.
+Topology:
+  - TopologyBuilder: builder for test network topologies
+  - MasterNode, SatelliteNode, RelayNode: network node types
 
-Example:
+Protocol plugins:
+  - TestAgentProtocol: FakeBus-backed agent plugin (fast, deterministic)
+  - TestBinaryProtocol: binary data handler stub
+  - TestNetworkProtocol: in-process network protocol stub
+  - LoopbackNetworkProtocol: real WebSocket on localhost:0 (external clients)
+  - OvoscopeAgentProtocol: MiniCroft-backed agent (requires ``ovos`` extra)
+
+Message recording:
+  - MessageRecorder, RecordedMessage: per-node traffic capture + blocking wait
+
+Database:
+  - InMemoryClientDatabase: in-memory credential store (no disk I/O)
+
+Assertion helpers (also importable from hivescope.assertions):
+  - assert_handshake_complete
+  - assert_encryption_match
+  - assert_message_routed
+  - assert_message_received_by
+  - assert_message_sent_by
+  - assert_client_registered
+  - assert_client_not_registered
+  - assert_acl_enforced
+
+Scenario builders (also importable from hivescope.scenarios):
+  - single_satellite, admin_satellite, three_satellites
+  - with_relay, chain_topology, star_topology
+  - with_acl_enforcement, hierarchical_hubs, with_multiple_agent_protocols
+
+Pytest fixtures (register via conftest.py):
+  pytest_plugins = ['hivescope.pytest_fixtures']
+
+Consumer install:
+  pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@master"
+
+Quick example:
+
   from hivescope import TopologyBuilder
   from hivescope.scenarios import single_satellite
+  from hivescope.assertions import assert_handshake_complete
 
-  # Build and run a simple test topology
-  b = single_satellite()
-  b.start_all()
-  # ... test assertions ...
-  b.stop_all()
+  def test_handshake():
+      b = single_satellite()
+      b.start_all()
+      try:
+          assert_handshake_complete(b.get_master("M0"), b.get_satellite("S0"))
+      finally:
+          b.stop_all()
 """
 
 from hivescope.topology import TopologyBuilder
@@ -40,28 +69,98 @@ from hivescope.plugins.agent import TestAgentProtocol
 from hivescope.plugins.binary import TestBinaryProtocol
 from hivescope.plugins.network import TestNetworkProtocol
 
-# Optional: OvoscopeAgentProtocol requires ovoscope+ovos-core
+# Optional: requires real websockets dep (always present per pyproject.toml)
+try:
+    from hivescope.plugins.loopback import LoopbackNetworkProtocol
+except ImportError:
+    LoopbackNetworkProtocol = None  # type: ignore[assignment,misc]
+
+# Optional: OvoscopeAgentProtocol requires ovoscope+ovos-core (``ovos`` extra)
 try:
     from hivescope.plugins.ovoscope_agent import OvoscopeAgentProtocol
 except ImportError:
-    OvoscopeAgentProtocol = None
+    OvoscopeAgentProtocol = None  # type: ignore[assignment,misc]
+
+# Assertion helpers — re-exported for convenience
+from hivescope.assertions import (
+    assert_handshake_complete,
+    assert_encryption_match,
+    assert_message_routed,
+    assert_message_received_by,
+    assert_message_sent_by,
+    assert_client_registered,
+    assert_client_not_registered,
+    assert_acl_enforced,
+    # type-specific ready helpers
+    assert_hello_received,
+    assert_bus_message_routed,
+    assert_shared_bus_received,
+    assert_broadcast_delivered,
+    assert_broadcast_blocked,
+    assert_propagate_delivered,
+    assert_escalate_delivered,
+    assert_intercom_delivered,
+    assert_binary_delivered,
+)
+
+# Scenario builders — re-exported for convenience
+from hivescope.scenarios import (
+    single_satellite,
+    admin_satellite,
+    three_satellites,
+    with_relay,
+    chain_topology,
+    star_topology,
+    with_acl_enforcement,
+    hierarchical_hubs,
+    with_multiple_agent_protocols,
+)
 
 from hivescope.version import __version__
 
 __all__ = [
-    # Core topology classes (stable)
+    # --- topology ---
     "TopologyBuilder",
     "MasterNode",
     "SatelliteNode",
     "RelayNode",
-    # Protocol plugins (stable)
+    # --- plugins ---
     "TestAgentProtocol",
     "TestBinaryProtocol",
     "TestNetworkProtocol",
+    "LoopbackNetworkProtocol",
     "OvoscopeAgentProtocol",
-    # Message recording (stable)
+    # --- recording ---
     "MessageRecorder",
     "RecordedMessage",
-    # Database (stable)
+    # --- database ---
     "InMemoryClientDatabase",
+    # --- assertion helpers ---
+    "assert_handshake_complete",
+    "assert_encryption_match",
+    "assert_message_routed",
+    "assert_message_received_by",
+    "assert_message_sent_by",
+    "assert_client_registered",
+    "assert_client_not_registered",
+    "assert_acl_enforced",
+    "assert_hello_received",
+    "assert_bus_message_routed",
+    "assert_shared_bus_received",
+    "assert_broadcast_delivered",
+    "assert_broadcast_blocked",
+    "assert_propagate_delivered",
+    "assert_escalate_delivered",
+    "assert_intercom_delivered",
+    "assert_binary_delivered",
+    # --- scenario builders ---
+    "single_satellite",
+    "admin_satellite",
+    "three_satellites",
+    "with_relay",
+    "chain_topology",
+    "star_topology",
+    "with_acl_enforcement",
+    "hierarchical_hubs",
+    "with_multiple_agent_protocols",
 ]
