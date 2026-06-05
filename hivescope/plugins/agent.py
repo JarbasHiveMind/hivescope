@@ -71,6 +71,15 @@ class TestAgentProtocol(AgentProtocol):
         self.bus.on("hive.send.downstream", self.handle_send)
         self.bus.on("message", self.handle_internal_mycroft)
 
+    # -----------------------------------------------------------------------
+    # natural_language_query — the AgentProtocol seam QUERY/CASCADE consume.
+    # Streams speak replies correlated by a fresh query_id (query-scoped
+    # session keeps them from being reverse-routed to the satellite).
+    # -----------------------------------------------------------------------
+    def natural_language_query(self, utterance: str, lang: str):
+        """Stream speak replies from the test bus (short timeout for tests)."""
+        return self._stream_from_bus(utterance, lang, timeout=2.0)
+
     def handle_send(self, message: Message) -> None:
         """Route an explicit ``hive.send.downstream`` request.
 
