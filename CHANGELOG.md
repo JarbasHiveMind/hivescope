@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0a3](https://github.com/JarbasHiveMind/hivescope/tree/0.3.0a3) (2026-06-05)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.3.0a2...0.3.0a3)
+
+**Merged pull requests:**
+
+- test: XPASS warning + §6 MAY → skip [\#16](https://github.com/JarbasHiveMind/hivescope/pull/16) ([JarbasAl](https://github.com/JarbasAl))
+
+## [0.3.0a2](https://github.com/JarbasHiveMind/hivescope/tree/0.3.0a2) (2026-06-05)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.3.0a1...0.3.0a2)
+
 ## [0.3.0a1](https://github.com/JarbasHiveMind/hivescope/tree/0.3.0a1) (2026-06-05)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.2.2a2...0.3.0a1)
