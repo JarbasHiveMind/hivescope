@@ -473,9 +473,8 @@ class TestSessionPropagation:
 class TestTopologyHiding:
     """BRIDGE-1 §6 (MAY): topology hiding overwrites outbound source."""
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="BRIDGE-1 §6 topology-hiding is a MAY; not wired in current bridge",
+    @pytest.mark.skip(
+        reason="BRIDGE-1 §6 topology-hiding is an optional MAY the bridge does not implement",
     )
     def test_source_hidden_on_outbound(self):
         """Outbound messages from master carry a generic 'hive' source id."""
