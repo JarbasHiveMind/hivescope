@@ -126,9 +126,14 @@ class MasterNode:
                handshake_enabled: bool = True,
                agent_protocol: "TestAgentProtocol" = None,
                use_loopback: bool = False,
+               db: "Any" = None,
                **kwargs) -> "MasterNode":
         identity = make_identity(name)
-        db = InMemoryClientDatabase()
+        # Default to the in-memory store; callers may inject a real
+        # ClientDatabase-compatible backend (e.g. a migrated sqlite/redis
+        # plugin DB) to exercise the full DB → policy → session path.
+        if db is None:
+            db = InMemoryClientDatabase()
         agent = agent_protocol if agent_protocol is not None else TestAgentProtocol()
         binary = TestBinaryProtocol(agent_protocol=agent)
         hm_proto = HiveMindListenerProtocol(
