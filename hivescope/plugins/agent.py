@@ -71,6 +71,59 @@ class TestAgentProtocol(AgentProtocol):
         self.bus.on("hive.send.downstream", self.handle_send)
         self.bus.on("message", self.handle_internal_mycroft)
 
+    # -----------------------------------------------------------------------
+    # natural_language_query — the AgentProtocol seam QUERY/CASCADE consume.
+    # Streams speak replies correlated by a fresh query_id (query-scoped
+    # session keeps them from being reverse-routed to the satellite).
+    # -----------------------------------------------------------------------
+    def natural_language_query(self, utterance: str, lang: str):
+        """Stream speak replies from the test bus, correlated by a fresh
+        query-scoped session (short timeout for tests)."""
+        import queue
+        import uuid
+        qid = uuid.uuid4().hex
+        q: "queue.Queue" = queue.Queue()
+
+        def _on_speak(msg):
+            if isinstance(msg, str):
+                try:
+                    msg = Message.deserialize(msg)
+                except Exception:
+                    return
+            if msg.msg_type == "speak" and msg.context.get("query_id") == qid:
+                q.put(msg.data.get("utterance", ""))
+
+        def _on_done(msg):
+            if isinstance(msg, str):
+                try:
+                    msg = Message.deserialize(msg)
+                except Exception:
+                    return
+            if msg.context.get("query_id") == qid:
+                q.put(None)
+
+        self.bus.on("speak", _on_speak)
+        self.bus.on("ovos.utterance.handled", _on_done)
+        try:
+            self.bus.emit(Message(
+                "recognizer_loop:utterance",
+                {"utterances": [utterance], "lang": lang},
+                {"query_id": qid, "session": {"session_id": qid}},
+            ))
+            while True:
+                try:
+                    chunk = q.get(timeout=2.0)
+                except queue.Empty:
+                    yield None
+                    return
+                if chunk is None:
+                    yield None
+                    return
+                yield chunk
+        finally:
+            self.bus.remove("speak", _on_speak)
+            self.bus.remove("ovos.utterance.handled", _on_done)
+
     def handle_send(self, message: Message) -> None:
         """Route an explicit ``hive.send.downstream`` request.
 
