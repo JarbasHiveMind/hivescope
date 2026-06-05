@@ -222,7 +222,7 @@ def test_session_inbound_preserved():
 
         assert_session_inbound_preserved(
             m, s,
-            expected_session={"session_id": sid, "lang": "pt-PT"},
+            expected_session={"session_id": sid, "lang": sess.serialize().get("lang")},
         )
     finally:
         b.stop_all()

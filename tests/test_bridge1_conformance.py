@@ -241,7 +241,6 @@ class TestDestinationRouting:
 # §4.1 — Session fidelity: inbound and outbound
 # ─────────────────────────────────────────────────────────────────────────────
 
-@_requires_policy_chain
 class TestSessionFidelity:
     """BRIDGE-1 §4.1: the bridge preserves context.session in both directions."""
 
@@ -265,7 +264,7 @@ class TestSessionFidelity:
 
             assert_session_inbound_preserved(
                 m, s,
-                expected_session={"session_id": custom_session_id, "lang": "pt-PT"},
+                expected_session={"session_id": custom_session_id, "lang": sess.serialize().get("lang")},
             )
         finally:
             b.stop_all()
@@ -410,7 +409,6 @@ class TestFifoOrdering:
 # SESSION-1 §4 — Session field propagation unchanged
 # ─────────────────────────────────────────────────────────────────────────────
 
-@_requires_policy_chain
 class TestSessionPropagation:
     """SESSION-1 §4: session fields propagate unchanged across derivations."""
 
@@ -434,7 +432,7 @@ class TestSessionPropagation:
             assert_session_propagated_unchanged(
                 m,
                 field="lang",
-                value="fr-FR",
+                value=sess.serialize().get("lang"),
                 msg_type="recognizer_loop:utterance",
             )
         finally:

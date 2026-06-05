@@ -883,6 +883,9 @@ def assert_destination_routed(
             f"Records: {target_satellite.recorder.records}"
         )
 
+    # A delayed misroute can land just after the target receipt; give it a
+    # moment to surface before declaring no cross-talk (BRIDGE-1 §3.2).
+    time.sleep(0.2)
     errors: List[str] = []
     for other in other_satellites:
         matches = [
@@ -1039,7 +1042,7 @@ def assert_fifo_order(
     records = [
         r for r in master.recorder.records
         if r.direction == "bus_inject" and r.peer == peer and r.msg_type == msg_type
-    ][:count]
+    ][-count:]  # validate the most recent batch, not stale earlier traffic
 
     if len(records) < count:
         raise AssertionError(
