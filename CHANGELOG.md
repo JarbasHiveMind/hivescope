@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0a1](https://github.com/JarbasHiveMind/hivescope/tree/0.4.0a1) (2026-06-05)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.3.0a3...0.4.0a1)
+
+**Merged pull requests:**
+
+- feat: inject a real DB backend into MasterNode \(db=\) [\#18](https://github.com/JarbasHiveMind/hivescope/pull/18) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.3.0a3](https://github.com/JarbasHiveMind/hivescope/tree/0.3.0a3) (2026-06-05)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.3.0a2...0.3.0a3)
