@@ -241,6 +241,7 @@ class TestDestinationRouting:
 # §4.1 — Session fidelity: inbound and outbound
 # ─────────────────────────────────────────────────────────────────────────────
 
+@_requires_policy_chain
 class TestSessionFidelity:
     """BRIDGE-1 §4.1: the bridge preserves context.session in both directions."""
 
@@ -409,6 +410,7 @@ class TestFifoOrdering:
 # SESSION-1 §4 — Session field propagation unchanged
 # ─────────────────────────────────────────────────────────────────────────────
 
+@_requires_policy_chain
 class TestSessionPropagation:
     """SESSION-1 §4: session fields propagate unchanged across derivations."""
 
