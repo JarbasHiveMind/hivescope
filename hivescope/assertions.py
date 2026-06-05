@@ -35,6 +35,7 @@ Usage::
     )
 """
 
+import time
 from typing import Any, List, Optional
 
 from hivescope.node import MasterNode, SatelliteNode
@@ -706,4 +707,473 @@ def assert_thirdparty_passed(
             f"Expected {count} THIRDPRTY message(s) (direction={direction!r}) "
             f"at '{node.recorder.name}', got {len(matches)}.\n"
             f"All records: {node.recorder.records}"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OVOS-BRIDGE-1 conformance assertions
+#
+# Each helper directly implements one normative clause from the three specs:
+#   OVOS-BRIDGE-1  (bus bridge / opaque relay)
+#   OVOS-SESSION-1 (session wire shape)
+#   OVOS-SESSION-2 (state ownership)
+#
+# Assertions that operate on bus_inject records (the OVOS bus side) read
+# the Message objects stored by _recording_inject in node.py.
+# Assertions that operate on inbound/outbound HiveMessage records read the
+# raw payload dict stored by the recorder.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def assert_msg1_envelope(master: MasterNode, msg_type: str, count: int = 1) -> None:
+    """Assert that bus-injected messages conform to the OVOS-MSG-1 envelope.
+
+    BRIDGE-1 §2: "A bridge MUST conform to OVOS-MSG-1 for all bus emissions."
+
+    Checks that every ``bus_inject`` record for *msg_type* at *master* carries:
+    - a non-empty ``msg_type`` field (the OVOS message topic)
+    - a ``context`` dict (routing envelope present)
+
+    Args:
+        master:    The master node.
+        msg_type:  The OVOS bus message type to check (e.g. ``"speak"``).
+        count:     Minimum number of conformant injections required (default 1).
+    """
+    injected = [
+        r for r in master.recorder.records
+        if r.direction == "bus_inject" and r.msg_type == msg_type
+    ]
+    if len(injected) < count:
+        raise AssertionError(
+            f"assert_msg1_envelope: expected at least {count} bus_inject record(s) "
+            f"for '{msg_type}', found {len(injected)}.\n"
+            f"All records: {master.recorder.records}"
+        )
+    errors: List[str] = []
+    for r in injected:
+        msg = r.payload
+        # payload is a Message instance for bus_inject records
+        if not getattr(msg, "msg_type", None):
+            errors.append(f"record {r!r}: missing or empty msg_type on Message")
+        if not isinstance(getattr(msg, "context", None), dict):
+            errors.append(f"record {r!r}: context is not a dict (got {type(getattr(msg, 'context', None)).__name__})")
+    if errors:
+        raise AssertionError(
+            "assert_msg1_envelope: OVOS-MSG-1 envelope violations:\n  "
+            + "\n  ".join(errors)
+        )
+
+
+def assert_source_stamped(
+    master: MasterNode,
+    satellite: SatelliteNode,
+    other_satellites: Optional[List[SatelliteNode]] = None,
+) -> None:
+    """Assert inbound bus messages carry a unique, stable ``context.source`` for *satellite*.
+
+    BRIDGE-1 §3.1: "On receiving a message from an external participant, the bridge
+    MUST ensure the resulting bus Message carries a unique identifier for that
+    participant in context.source."
+
+    Checks:
+    - Every ``bus_inject`` record from *satellite* carries a non-empty
+      ``context["source"]``.
+    - All records from the same satellite share the same source value (stable).
+    - If *other_satellites* is given, their sources are distinct from this
+      satellite's source (unique across peers).
+
+    Args:
+        master:           The master node.
+        satellite:        The satellite whose injections are inspected.
+        other_satellites: Optional list of other connected satellites; if given,
+                          their source values must differ from *satellite*'s.
+    """
+    peer = satellite.peer
+    my_records = [
+        r for r in master.recorder.records
+        if r.direction == "bus_inject" and r.peer == peer
+    ]
+    if not my_records:
+        raise AssertionError(
+            f"assert_source_stamped: no bus_inject records from peer={peer!r}.\n"
+            f"All records: {master.recorder.records}"
+        )
+
+    errors: List[str] = []
+    sources = set()
+    for r in my_records:
+        msg = r.payload
+        src = (getattr(msg, "context", {}) or {}).get("source")
+        if not src:
+            errors.append(f"record {r!r}: context.source absent or empty")
+        else:
+            sources.add(src)
+
+    if len(sources) > 1:
+        errors.append(
+            f"source not stable — multiple values seen across records: {sources}"
+        )
+
+    if errors:
+        raise AssertionError(
+            "assert_source_stamped: BRIDGE-1 §3.1 source-stamping failures:\n  "
+            + "\n  ".join(errors)
+        )
+
+    my_source = next(iter(sources)) if sources else None
+
+    if other_satellites and my_source:
+        for other in other_satellites:
+            other_peer = other.peer
+            other_records = [
+                r for r in master.recorder.records
+                if r.direction == "bus_inject" and r.peer == other_peer
+            ]
+            for r in other_records:
+                msg = r.payload
+                src = (getattr(msg, "context", {}) or {}).get("source")
+                if src and src == my_source:
+                    errors.append(
+                        f"source collision: satellite '{satellite.name}' and "
+                        f"'{other.name}' share source={my_source!r} — sources MUST be distinct"
+                    )
+                    break
+
+    if errors:
+        raise AssertionError(
+            "assert_source_stamped: BRIDGE-1 §3.1 source uniqueness failures:\n  "
+            + "\n  ".join(errors)
+        )
+
+
+def assert_destination_routed(
+    master: MasterNode,
+    target_satellite: SatelliteNode,
+    other_satellites: List[SatelliteNode],
+    msg_type: str,
+    timeout: float = 2.0,
+) -> None:
+    """Assert an outbound message reaches only *target_satellite* and not others.
+
+    BRIDGE-1 §3.2: "The bridge MUST relay the Message to the corresponding
+    external participant" when ``context.destination`` matches.  A message
+    destined for one satellite MUST NOT be delivered to others (no cross-talk).
+
+    Checks:
+    - *target_satellite* recorded at least one inbound message of *msg_type*.
+    - None of *other_satellites* recorded an inbound message of *msg_type*.
+
+    The master emits a BUS message with ``context.destination`` set to
+    *target_satellite*'s peer and the bridge must route it accordingly.  This
+    helper inspects the satellite recorders directly; the bus emission itself
+    is the caller's responsibility.
+
+    Args:
+        master:            The master node (unused in the check; kept for
+                           signature parity and future extension).
+        target_satellite:  The satellite that should receive the message.
+        other_satellites:  Satellites that must NOT receive the message.
+        msg_type:          HiveMessage type value to look for at the satellites
+                           (typically ``HiveMessageType.BUS.value``).
+        timeout:           Seconds to wait for the target to receive the message.
+    """
+    # Wait for target
+    recv = target_satellite.recorder.wait_for(msg_type, direction="in", timeout=timeout)
+    if recv is None:
+        raise AssertionError(
+            f"assert_destination_routed: '{target_satellite.name}' did NOT receive "
+            f"a '{msg_type}' message within {timeout}s.\n"
+            f"Records: {target_satellite.recorder.records}"
+        )
+
+    # A delayed misroute can land just after the target receipt; give it a
+    # moment to surface before declaring no cross-talk (BRIDGE-1 §3.2).
+    time.sleep(0.2)
+    errors: List[str] = []
+    for other in other_satellites:
+        matches = [
+            r for r in other.recorder.records
+            if r.direction == "in" and r.msg_type == msg_type
+        ]
+        if matches:
+            errors.append(
+                f"'{other.name}' received {len(matches)} '{msg_type}' message(s) "
+                "but should not have (destination routing cross-talk)"
+            )
+    if errors:
+        raise AssertionError(
+            "assert_destination_routed: BRIDGE-1 §3.2 routing failures:\n  "
+            + "\n  ".join(errors)
+        )
+
+
+def assert_session_inbound_preserved(
+    master: MasterNode,
+    satellite: SatelliteNode,
+    expected_session: dict,
+) -> None:
+    """Assert the satellite's session is preserved into the bus context on injection.
+
+    BRIDGE-1 §4.1 (inbound): "The bridge MUST extract the session from the
+    external payload and place it in the bus Message context."
+
+    Checks that the last ``bus_inject`` record from *satellite* has a
+    ``context["session"]["session_id"]`` matching *expected_session*'s
+    ``session_id`` (and any other keys explicitly set in *expected_session*).
+
+    Args:
+        master:           The master node.
+        satellite:        The satellite that sent the message.
+        expected_session: Dict of session fields that must be present and equal
+                          in the injected message's context.session.
+    """
+    peer = satellite.peer
+    records = [
+        r for r in master.recorder.records
+        if r.direction == "bus_inject" and r.peer == peer
+    ]
+    if not records:
+        raise AssertionError(
+            f"assert_session_inbound_preserved: no bus_inject records from "
+            f"peer={peer!r}.\nAll records: {master.recorder.records}"
+        )
+
+    record = records[-1]
+    msg = record.payload
+    actual_session = (getattr(msg, "context", {}) or {}).get("session") or {}
+
+    errors: List[str] = []
+    for key, expected_val in expected_session.items():
+        actual_val = actual_session.get(key)
+        if actual_val != expected_val:
+            errors.append(
+                f"session.{key}: expected={expected_val!r}, actual={actual_val!r}"
+            )
+
+    if errors:
+        raise AssertionError(
+            "assert_session_inbound_preserved: BRIDGE-1 §4.1 inbound session "
+            "fidelity failures:\n  " + "\n  ".join(errors)
+        )
+
+
+def assert_session_outbound_preserved(
+    satellite: SatelliteNode,
+    expected_session: dict,
+    timeout: float = 2.0,
+) -> None:
+    """Assert a bus-originated message's session reaches the satellite intact.
+
+    BRIDGE-1 §4.1 (outbound): "The bridge MUST extract the session from the
+    bus Message and include it in the external payload."
+
+    Checks the last inbound BUS message at *satellite* and verifies that
+    *expected_session* fields are present in its payload's ``context.session``.
+
+    Args:
+        satellite:        The satellite that should receive the session.
+        expected_session: Dict of session fields that must be present and equal
+                          in the received message's context.session.
+        timeout:          Seconds to wait for an inbound BUS message.
+    """
+    recv = satellite.recorder.wait_for(HiveMessageType.BUS.value, direction="in",
+                                       timeout=timeout)
+    if recv is None:
+        raise AssertionError(
+            f"assert_session_outbound_preserved: '{satellite.name}' received no "
+            f"inbound BUS message within {timeout}s.\n"
+            f"Records: {satellite.recorder.records}"
+        )
+
+    # payload for inbound BUS records is the raw _payload dict:
+    # {"type": <msg_type>, "data": {...}, "context": {...}}
+    payload = recv.payload if isinstance(recv.payload, dict) else {}
+    actual_session = (payload.get("context") or {}).get("session") or {}
+
+    errors: List[str] = []
+    for key, expected_val in expected_session.items():
+        actual_val = actual_session.get(key)
+        if actual_val != expected_val:
+            errors.append(
+                f"session.{key}: expected={expected_val!r}, actual={actual_val!r}"
+            )
+
+    if errors:
+        raise AssertionError(
+            "assert_session_outbound_preserved: BRIDGE-1 §4.1 outbound session "
+            "fidelity failures:\n  " + "\n  ".join(errors)
+        )
+
+
+def assert_fifo_order(
+    master: MasterNode,
+    satellite: SatelliteNode,
+    msg_type: str,
+    count: int,
+    timeout: float = 5.0,
+) -> None:
+    """Assert that *count* sequential messages from *satellite* arrive in send order.
+
+    BRIDGE-1 §5: "Sequential utterances from the same participant MUST be
+    placed on the bus in the order they were received."
+
+    Checks that the ``bus_inject`` records for *msg_type* from *satellite*
+    arrive in ascending timestamp order (no reorder).  The caller must
+    send *count* messages with a monotonically increasing marker in
+    ``data["_fifo_seq"]``; this helper verifies that order is preserved.
+
+    Args:
+        master:    The master node.
+        satellite: The satellite that sent the messages.
+        msg_type:  OVOS bus message type used for the sequenced messages.
+        count:     Number of messages expected in order.
+        timeout:   Seconds to wait for all *count* messages to arrive.
+    """
+    peer = satellite.peer
+    deadline = time.monotonic() + timeout
+    while True:
+        records = [
+            r for r in master.recorder.records
+            if r.direction == "bus_inject" and r.peer == peer and r.msg_type == msg_type
+        ]
+        if len(records) >= count:
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
+
+    records = [
+        r for r in master.recorder.records
+        if r.direction == "bus_inject" and r.peer == peer and r.msg_type == msg_type
+    ][-count:]  # validate the most recent batch, not stale earlier traffic
+
+    if len(records) < count:
+        raise AssertionError(
+            f"assert_fifo_order: expected {count} '{msg_type}' bus_inject records "
+            f"from peer={peer!r}, got {len(records)} after {timeout}s.\n"
+            f"All records: {master.recorder.records}"
+        )
+
+    errors: List[str] = []
+    seqs = []
+    for r in records:
+        msg = r.payload
+        data = getattr(msg, "data", {}) or {}
+        seq = data.get("_fifo_seq")
+        seqs.append(seq)
+
+    # If _fifo_seq was set, verify monotonically increasing
+    if all(s is not None for s in seqs):
+        for i in range(1, len(seqs)):
+            if seqs[i] <= seqs[i - 1]:
+                errors.append(
+                    f"FIFO reorder at position {i}: seq[{i-1}]={seqs[i-1]} "
+                    f"followed by seq[{i}]={seqs[i]} (expected strictly increasing)"
+                )
+    else:
+        # Fall back to timestamp order
+        timestamps = [r.timestamp for r in records]
+        for i in range(1, len(timestamps)):
+            if timestamps[i] < timestamps[i - 1]:
+                errors.append(
+                    f"FIFO reorder at position {i}: timestamp[{i-1}]={timestamps[i-1]:.6f} "
+                    f"followed by timestamp[{i}]={timestamps[i]:.6f}"
+                )
+
+    if errors:
+        raise AssertionError(
+            "assert_fifo_order: BRIDGE-1 §5 FIFO ordering failures:\n  "
+            + "\n  ".join(errors)
+        )
+
+
+def assert_session_propagated_unchanged(
+    master: MasterNode,
+    field: str,
+    value: Any,
+    msg_type: Optional[str] = None,
+) -> None:
+    """Assert a session field rides unchanged across the bridge derivation.
+
+    SESSION-1 §4: "Every field in §3 propagates unchanged — no field is
+    non-propagating."
+
+    Checks that every ``bus_inject`` record at *master* (optionally filtered
+    to *msg_type*) has ``context["session"][field] == value``.
+
+    Args:
+        master:    The master node.
+        field:     Session field name (e.g. ``"lang"``).
+        value:     Expected value that must be present and unchanged.
+        msg_type:  Optional OVOS message type to filter records.
+    """
+    records = [
+        r for r in master.recorder.records
+        if r.direction == "bus_inject"
+        and (msg_type is None or r.msg_type == msg_type)
+    ]
+    if not records:
+        raise AssertionError(
+            f"assert_session_propagated_unchanged: no bus_inject records "
+            f"(msg_type={msg_type!r}).\nAll records: {master.recorder.records}"
+        )
+
+    errors: List[str] = []
+    for r in records:
+        msg = r.payload
+        session = (getattr(msg, "context", {}) or {}).get("session") or {}
+        actual = session.get(field)
+        if actual != value:
+            errors.append(
+                f"record {r!r}: session.{field}={actual!r} (expected {value!r})"
+            )
+
+    if errors:
+        raise AssertionError(
+            "assert_session_propagated_unchanged: SESSION-1 §4 propagation "
+            "failures:\n  " + "\n  ".join(errors)
+        )
+
+
+def assert_source_hidden(
+    satellite: SatelliteNode,
+    generic_id: str = "hive",
+    msg_type: Optional[str] = None,
+    timeout: float = 2.0,
+) -> None:
+    """Assert topology-hiding: outbound source is overwritten with *generic_id*.
+
+    BRIDGE-1 §6 (MAY): "A bridge MAY perform topology hiding by overwriting
+    the source of outbound messages with a generic assistant ID (e.g. 'hive')."
+
+    Checks that inbound BUS messages at *satellite* carry
+    ``context["source"] == generic_id`` rather than any internal peer address.
+
+    This assertion is for the optional topology-hiding feature; mark tests
+    using it with ``@pytest.mark.skipif`` if the feature is not enabled.
+
+    Args:
+        satellite:  The satellite that received the message.
+        generic_id: Expected generic source id (default ``"hive"``).
+        msg_type:   HiveMessage type to check (default: ``"bus"``).
+        timeout:    Seconds to wait for an inbound message.
+    """
+    mt = msg_type or HiveMessageType.BUS.value
+    recv = satellite.recorder.wait_for(mt, direction="in", timeout=timeout)
+    if recv is None:
+        raise AssertionError(
+            f"assert_source_hidden: '{satellite.name}' received no inbound "
+            f"'{mt}' message within {timeout}s.\n"
+            f"Records: {satellite.recorder.records}"
+        )
+
+    payload = recv.payload if isinstance(recv.payload, dict) else {}
+    context = payload.get("context") or {}
+    actual_source = context.get("source")
+
+    if actual_source != generic_id:
+        raise AssertionError(
+            f"assert_source_hidden: BRIDGE-1 §6 topology-hiding — "
+            f"expected source={generic_id!r}, got source={actual_source!r}.\n"
+            f"Payload context: {context}"
         )
