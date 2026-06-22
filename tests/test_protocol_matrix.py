@@ -397,10 +397,6 @@ def test_cascade_routed():
 # PENDING — PING
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    reason="PING full round-trip pending: hivemind-core#74",
-    strict=False,
-)
 def test_ping_responded():
     b = single_satellite()
     b.start_all()
@@ -417,10 +413,6 @@ def test_ping_responded():
 # PENDING — RENDEZVOUS
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    reason="RENDEZVOUS routing pending: hivemind-websocket-client#103",
-    strict=False,
-)
 def test_rendezvous_handled():
     b = single_satellite()
     b.start_all()
@@ -437,10 +429,6 @@ def test_rendezvous_handled():
 # THIRDPRTY (verify passthrough)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    reason="THIRDPRTY passthrough not yet verified in core routing",
-    strict=False,
-)
 def test_thirdparty_passed():
     b = single_satellite()
     b.start_all()

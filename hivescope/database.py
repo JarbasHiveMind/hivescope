@@ -36,11 +36,17 @@ class InMemoryClientDatabase:
             if name:
                 existing.name = name
             if intent_blacklist is not None:
-                existing.intent_blacklist = intent_blacklist
+                if intent_blacklist:
+                    existing.metadata["intent_blacklist"] = list(intent_blacklist)
+                else:
+                    existing.metadata.pop("intent_blacklist", None)
             if skill_blacklist is not None:
-                existing.skill_blacklist = skill_blacklist
-            if message_blacklist is not None:
-                existing.message_blacklist = message_blacklist
+                if skill_blacklist:
+                    existing.metadata["skill_blacklist"] = list(skill_blacklist)
+                else:
+                    existing.metadata.pop("skill_blacklist", None)
+            # message_blacklist is removed from the data model (hivemind-core is
+            # whitelist-only via allowed_types); accepted for API compat, ignored.
             if allowed_types is not None:
                 existing.allowed_types = allowed_types
             existing.is_admin = admin
@@ -54,20 +60,27 @@ class InMemoryClientDatabase:
             self._clients[key] = existing
             return True
 
+        # Per-client OVOS ACL blacklists live in Client.metadata now; the old
+        # top-level skill_/intent_blacklist kwargs are deprecated and
+        # message_blacklist is removed (hivemind-core is whitelist-only).
+        metadata = {}
+        if skill_blacklist:
+            metadata["skill_blacklist"] = list(skill_blacklist)
+        if intent_blacklist:
+            metadata["intent_blacklist"] = list(intent_blacklist)
+
         client = Client(
             api_key=key,
             name=name,
             client_id=self.total_clients() + 1,
             is_admin=admin,
-            intent_blacklist=intent_blacklist,
-            skill_blacklist=skill_blacklist,
-            message_blacklist=message_blacklist,
-            allowed_types=allowed_types,
+            allowed_types=allowed_types or [],
             crypto_key=crypto_key,
             password=password,
             can_escalate=can_escalate,
             can_propagate=can_propagate,
             can_broadcast=can_broadcast,
+            metadata=metadata,
         )
         self._clients[key] = client
         return True
