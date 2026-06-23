@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.2a1](https://github.com/JarbasHiveMind/hivescope/tree/0.5.2a1) (2026-06-23)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.5.1a1...0.5.2a1)
+
+**Merged pull requests:**
+
+- fix: floor hivemind-core to the 2.x line \(collapse the consumer prerelease cascade\) [\#28](https://github.com/JarbasHiveMind/hivescope/pull/28) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.5.1a1](https://github.com/JarbasHiveMind/hivescope/tree/0.5.1a1) (2026-06-23)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.5.0a2...0.5.1a1)
