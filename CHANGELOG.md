@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1a1](https://github.com/JarbasHiveMind/hivescope/tree/0.5.1a1) (2026-06-23)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.5.0a2...0.5.1a1)
+
+**Merged pull requests:**
+
+- fix\(loopback\): drop removed blacklist kwargs \(real-socket handshake hang\) [\#26](https://github.com/JarbasHiveMind/hivescope/pull/26) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.5.0a2](https://github.com/JarbasHiveMind/hivescope/tree/0.5.0a2) (2026-06-05)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.5.0a1...0.5.0a2)
