@@ -23,8 +23,15 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
-    "hivemind-bus-client>=0.7.0a2",
-    "hivemind-core>=4.0",
+    "hivemind-bus-client>=0.9.2a1",
+    # 2.x prerelease floors: a stable >=4.0 / >=0.7 floor resolves to hivemind-core
+    # 4.0.0 + old ovos-bus-client under a plain `pip install`, forcing every
+    # hivescope consumer to floor the whole 2.x stack themselves. Flooring the 2.x
+    # line here (incl. ovos-bus-client, whose 2.x is prerelease-only — a direct
+    # prerelease specifier is needed to enable it) lets consumers get the right
+    # stack from just `hivescope>=0.5.1a1`.
+    "hivemind-core>=4.6.2a1,<5.0.0",
+    "ovos-bus-client>=2.0.0a3,<3.0.0",
     "ovos-utils>=0.0.40",
     "pytest>=7.4",
     "websockets>=11",
