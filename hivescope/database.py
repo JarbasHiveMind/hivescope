@@ -36,11 +36,17 @@ class InMemoryClientDatabase:
             if name:
                 existing.name = name
             if intent_blacklist is not None:
-                existing.intent_blacklist = intent_blacklist
+                if intent_blacklist:
+                    existing.metadata["intent_blacklist"] = list(intent_blacklist)
+                else:
+                    existing.metadata.pop("intent_blacklist", None)
             if skill_blacklist is not None:
-                existing.skill_blacklist = skill_blacklist
-            if message_blacklist is not None:
-                existing.message_blacklist = message_blacklist
+                if skill_blacklist:
+                    existing.metadata["skill_blacklist"] = list(skill_blacklist)
+                else:
+                    existing.metadata.pop("skill_blacklist", None)
+            # message_blacklist is removed from the data model (hivemind-core is
+            # whitelist-only via allowed_types); accepted for API compat, ignored.
             if allowed_types is not None:
                 existing.allowed_types = allowed_types
             existing.is_admin = admin
@@ -54,20 +60,27 @@ class InMemoryClientDatabase:
             self._clients[key] = existing
             return True
 
+        # Per-client OVOS ACL blacklists live in Client.metadata now; the old
+        # top-level skill_/intent_blacklist kwargs are deprecated and
+        # message_blacklist is removed (hivemind-core is whitelist-only).
+        metadata = {}
+        if skill_blacklist:
+            metadata["skill_blacklist"] = list(skill_blacklist)
+        if intent_blacklist:
+            metadata["intent_blacklist"] = list(intent_blacklist)
+
         client = Client(
             api_key=key,
             name=name,
             client_id=self.total_clients() + 1,
             is_admin=admin,
-            intent_blacklist=intent_blacklist,
-            skill_blacklist=skill_blacklist,
-            message_blacklist=message_blacklist,
-            allowed_types=allowed_types,
+            allowed_types=allowed_types or [],
             crypto_key=crypto_key,
             password=password,
             can_escalate=can_escalate,
             can_propagate=can_propagate,
             can_broadcast=can_broadcast,
+            metadata=metadata,
         )
         self._clients[key] = client
         return True
@@ -88,6 +101,26 @@ class InMemoryClientDatabase:
 
     def get_client_by_api_key(self, api_key: str) -> Optional[Client]:
         return self._clients.get(api_key)
+
+    def get_client_by_id(self, client_id: int) -> Optional[Client]:
+        """Look a client up by its numeric ``client_id``.
+
+        Part of the ClientDatabase read API: ``resolve_user`` on the
+        admission hot path caches the resolved row and, once its TTL
+        lapses, re-reads it via ``client_id`` (``refresh`` → this method).
+        Without it the cached re-lookup raises and the policy chain fails
+        closed with POLICY_ERROR, so the *second* message a satellite
+        sends on a long-lived connection (e.g. a second utterance ~16 s
+        after the first) is denied "user lookup failed".
+        """
+        for c in self._clients.values():
+            if getattr(c, "client_id", None) == client_id:
+                return c
+        return None
+
+    def refresh(self, client_id: int) -> Optional[Client]:
+        """Re-read a single client record (mirrors AbstractDB.refresh)."""
+        return self.get_client_by_id(client_id)
 
     def get_clients_by_name(self, name: str) -> List[Client]:
         return [c for c in self._clients.values() if c.name == name]

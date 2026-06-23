@@ -262,9 +262,10 @@ class LoopbackNetworkProtocol(NetworkProtocol):
             is_admin=db_client.is_admin,
             can_escalate=db_client.can_escalate,
             can_propagate=db_client.can_propagate,
-            msg_blacklist=list(db_client.message_blacklist or []),
-            skill_blacklist=list(db_client.skill_blacklist or []),
-            intent_blacklist=list(db_client.intent_blacklist or []),
+            # hivemind-core is whitelist-only now: admission is via allowed_types;
+            # the old msg_/skill_/intent_blacklist kwargs were removed from
+            # HiveMindClientConnection (skill/intent blacklists live in
+            # Client.metadata and are injected by OVOSAgentPolicy).
             allowed_types=list(db_client.allowed_types or []),
             node_type=HiveMindNodeType.NODE,
         )
