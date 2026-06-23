@@ -102,6 +102,26 @@ class InMemoryClientDatabase:
     def get_client_by_api_key(self, api_key: str) -> Optional[Client]:
         return self._clients.get(api_key)
 
+    def get_client_by_id(self, client_id: int) -> Optional[Client]:
+        """Look a client up by its numeric ``client_id``.
+
+        Part of the ClientDatabase read API: ``resolve_user`` on the
+        admission hot path caches the resolved row and, once its TTL
+        lapses, re-reads it via ``client_id`` (``refresh`` → this method).
+        Without it the cached re-lookup raises and the policy chain fails
+        closed with POLICY_ERROR, so the *second* message a satellite
+        sends on a long-lived connection (e.g. a second utterance ~16 s
+        after the first) is denied "user lookup failed".
+        """
+        for c in self._clients.values():
+            if getattr(c, "client_id", None) == client_id:
+                return c
+        return None
+
+    def refresh(self, client_id: int) -> Optional[Client]:
+        """Re-read a single client record (mirrors AbstractDB.refresh)."""
+        return self.get_client_by_id(client_id)
+
     def get_clients_by_name(self, name: str) -> List[Client]:
         return [c for c in self._clients.values() if c.name == name]
 
