@@ -64,6 +64,7 @@ class TestNetworkProtocol(NetworkProtocol):
             is_admin=db_client.is_admin,
             can_escalate=db_client.can_escalate,
             can_propagate=db_client.can_propagate,
+            can_broadcast=db_client.can_broadcast,
             allowed_types=list(db_client.allowed_types or []),
             node_type=HiveMindNodeType.NODE,
         )
