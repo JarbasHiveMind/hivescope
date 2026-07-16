@@ -55,3 +55,6 @@ version = {attr = "hivescope.version.__version__"}
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["hivescope*"]
+
+[project.entry-points.pytest11]
+hivescope_xdg_isolation = "hivescope.xdg_isolation"
