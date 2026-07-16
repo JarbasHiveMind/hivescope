@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0a1](https://github.com/JarbasHiveMind/hivescope/tree/0.6.0a1) (2026-07-16)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.5.2a1...0.6.0a1)
+
+**Merged pull requests:**
+
+- feat: auto-isolate XDG dirs for every pytest session [\#31](https://github.com/JarbasHiveMind/hivescope/pull/31) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.5.2a1](https://github.com/JarbasHiveMind/hivescope/tree/0.5.2a1) (2026-06-23)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.5.1a1...0.5.2a1)
