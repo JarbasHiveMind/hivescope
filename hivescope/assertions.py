@@ -51,10 +51,52 @@ SESSION_ID_DEFAULT_FORBIDDEN = "session_id_default_forbidden"
 
 def _find(recorder, msg_type_value: str, direction: Optional[str] = None):
     return [
-        r for r in recorder.records
+        r for r in recorder.snapshot()
         if r.msg_type == msg_type_value
         and (direction is None or r.direction == direction)
     ]
+
+
+# Message types that are connection setup or keepalive, never payload traffic.
+_NON_PAYLOAD_TYPES = (
+    HiveMessageType.HANDSHAKE.value,
+    HiveMessageType.HELLO.value,
+    HiveMessageType.PING.value,
+)
+
+
+def _inner_payload(record) -> dict:
+    """Return the inner OVOS payload dict of a recorded BUS message."""
+    return record.payload if isinstance(record.payload, dict) else {}
+
+
+def _is_policy_denied(record) -> bool:
+    """True when *record* is a ``hive.policy.denied`` response."""
+    return _inner_payload(record).get("type") == "hive.policy.denied"
+
+
+def _denied_records(satellite, msg_type: Optional[str] = None):
+    """Return ``hive.policy.denied`` records received by *satellite*.
+
+    When *msg_type* is given, only denials that name that message type are
+    returned — a denial carries the offending type in ``data["msg_type"]``
+    (or ``data["type"]``) when the policy reports it. Denials that carry no
+    type at all are kept, because the policy is not required to echo it.
+    """
+    out = []
+    for r in satellite.recorder.snapshot():
+        if r.direction != "in" or r.msg_type != HiveMessageType.BUS.value:
+            continue
+        payload = _inner_payload(r)
+        if payload.get("type") != "hive.policy.denied":
+            continue
+        if msg_type is not None:
+            data = payload.get("data") or {}
+            reported = data.get("msg_type") or data.get("type")
+            if reported is not None and reported != msg_type:
+                continue
+        out.append((r, payload))
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -75,11 +117,18 @@ def assert_handshake_complete(
     """
     errors: List[str] = []
 
+    # Wait up to *timeout* for the handshake event; loopback mode completes
+    # the handshake on the server thread, so the check must not be instant.
+    satellite.shim.handshake_event.wait(timeout=timeout)
+
     if satellite.shim.crypto_key is None:
         errors.append("satellite.shim.crypto_key is None (no crypto negotiated)")
 
     if not satellite.shim.handshake_event.is_set():
-        errors.append("satellite.shim.handshake_event not set (handshake not complete)")
+        errors.append(
+            f"satellite.shim.handshake_event not set after {timeout}s "
+            "(handshake not complete)"
+        )
 
     connected_peers = master.connected_peers()
     if satellite.peer not in connected_peers:
@@ -142,7 +191,7 @@ def assert_hello_received(
     if len(matches) != count:
         raise AssertionError(
             f"Expected {count} HELLO message(s) at master, got {len(matches)}.\n"
-            f"All inbound: {[r.msg_type for r in master.recorder.records if r.direction == 'in']}"
+            f"All inbound: {[r.msg_type for r in master.recorder.snapshot() if r.direction == 'in']}"
         )
 
 
@@ -159,7 +208,7 @@ def assert_bus_message_routed(
     if len(matches) != count:
         raise AssertionError(
             f"Expected {count} BUS message(s) at master, got {len(matches)}.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
 
@@ -177,7 +226,7 @@ def assert_shared_bus_received(
     if len(matches) != count:
         raise AssertionError(
             f"Expected {count} SHARED_BUS message(s) (direction={direction!r}), "
-            f"got {len(matches)}.\nAll records: {node.recorder.records}"
+            f"got {len(matches)}.\nAll records: {node.recorder.snapshot()}"
         )
 
 
@@ -210,18 +259,21 @@ def assert_broadcast_delivered(
             matches = _find(node.recorder, inner_msg_type, direction="in")
             label = f"BROADCAST(inner={inner_msg_type})"
         else:
-            # count all inbound messages added after handshake
+            # Count inbound payload messages only: connection-setup and
+            # keepalive traffic (HANDSHAKE, HELLO, PING) and policy-denied
+            # responses are not broadcast deliveries. Pass *inner_msg_type*
+            # for an exact match — this fallback is a best-effort filter.
             matches = [
-                r for r in node.recorder.records
+                r for r in node.recorder.snapshot()
                 if r.direction == "in"
-                and r.msg_type not in (HiveMessageType.HANDSHAKE.value, HiveMessageType.HELLO.value)
+                and r.msg_type not in _NON_PAYLOAD_TYPES
+                and not _is_policy_denied(r)
             ]
-            # subtract handshake messages already recorded before the broadcast
-            label = "BROADCAST(any inbound post-handshake)"
+            label = "BROADCAST(any inbound payload message)"
         if len(matches) != count:
             errors.append(
                 f"Node '{node.recorder.name}': expected {count} {label}, got {len(matches)}.\n"
-                f"  All records: {node.recorder.records}"
+                f"  All records: {node.recorder.snapshot()}"
             )
     if errors:
         raise AssertionError("Broadcast not fully delivered:\n  " + "\n  ".join(errors))
@@ -272,7 +324,7 @@ def assert_escalate_delivered(
     if len(matches) != count:
         raise AssertionError(
             f"Expected {count} ESCALATE message(s) at master, got {len(matches)}.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
 
@@ -289,7 +341,7 @@ def assert_intercom_delivered(
     if len(matches) != count:
         raise AssertionError(
             f"Expected {count} INTERCOM message(s) at '{recipient.recorder.name}', "
-            f"got {len(matches)}.\nAll records: {recipient.recorder.records}"
+            f"got {len(matches)}.\nAll records: {recipient.recorder.snapshot()}"
         )
 
 
@@ -315,15 +367,23 @@ def assert_binary_delivered(
     if len(matches) != count:
         raise AssertionError(
             f"Expected {count} BINARY message(s) at master recorder, got {len(matches)}.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
-    # Secondary: if expected_payload given and binary protocol has typed calls, verify
+    # Secondary: if expected_payload is given, the payload must actually match,
+    # either in a typed binary-protocol call or in the recorded raw payload.
     if expected_payload is not None:
-        typed_calls = [c for c in master.binary_protocol.calls if c.data == expected_payload]
-        if not typed_calls:
-            # Acceptable: untyped binary goes through recorder only
-            pass  # recorder check above already passed
+        typed_calls = [c for c in master.binary_protocol.calls
+                       if c.data == expected_payload]
+        recorded = [r for r in matches if r.payload == expected_payload]
+        if not typed_calls and not recorded:
+            raise AssertionError(
+                f"BINARY payload mismatch: expected {expected_payload!r} was not "
+                f"seen.\n"
+                f"  Typed binary protocol calls: "
+                f"{[getattr(c, 'data', None) for c in master.binary_protocol.calls]}\n"
+                f"  Recorded BINARY payloads: {[r.payload for r in matches]}"
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -363,19 +423,9 @@ def assert_acl_enforced(
     satellite is the canonical "was denied" indicator.
     """
     # A policy-denied message causes the master to send hive.policy.denied
-    # back to the satellite (recorded as inbound at the satellite).
-    policy_denied_at_sat = [
-        r for r in satellite.recorder.records
-        if r.direction == "in" and r.msg_type == "bus"
-    ]
-    # Look deeper: check inner payload msg_type for hive.policy.denied
-    denied_responses = []
-    for r in policy_denied_at_sat:
-        payload = r.payload if isinstance(r.payload, dict) else {}
-        # Satellite recorder stores HiveMessage._payload for BUS messages:
-        # {"type": <inner msg_type>, "data": {...}, "context": {...}}
-        if payload.get("type") == "hive.policy.denied":
-            denied_responses.append(r)
+    # back to the satellite (recorded as inbound at the satellite). Only
+    # denials that concern *msg_type* count.
+    denied_responses = [r for r, _ in _denied_records(satellite, msg_type)]
 
     if allowed:
         if denied_responses:
@@ -389,7 +439,7 @@ def assert_acl_enforced(
             raise AssertionError(
                 f"ACL violation: '{msg_type}' was NOT blocked — "
                 f"satellite received no hive.policy.denied response.\n"
-                f"Inbound records at satellite: {satellite.recorder.records}"
+                f"Inbound records at satellite: {satellite.recorder.snapshot()}"
             )
 
 
@@ -419,17 +469,13 @@ def assert_policy_denied(
     # has msg_type "hive.policy.denied".  The recorder stores the raw payload
     # dict for inbound "bus" records.
     inbound_bus = [
-        r for r in satellite.recorder.records
-        if r.direction == "in" and r.msg_type == "bus"
+        r for r in satellite.recorder.snapshot()
+        if r.direction == "in" and r.msg_type == HiveMessageType.BUS.value
     ]
 
-    denied_responses = []
-    for r in inbound_bus:
-        payload = r.payload if isinstance(r.payload, dict) else {}
-        # Satellite recorder stores HiveMessage._payload for BUS messages:
-        # {"type": <inner msg_type>, "data": {...}, "context": {...}}
-        if payload.get("type") == "hive.policy.denied":
-            denied_responses.append((r, payload))
+    # Correlate the denial with the message type under test where the payload
+    # reports it; denials without a type are accepted.
+    denied_responses = _denied_records(satellite, msg_type)
 
     if not denied_responses:
         raise AssertionError(
@@ -486,16 +532,23 @@ def assert_session_blacklists_injected(
                            ``context["session"]["blacklisted_intents"]``.
     """
     peer = satellite.peer
+    if peer is None:
+        raise AssertionError(
+            f"assert_session_blacklists_injected: satellite "
+            f"'{satellite.name}' has no peer — it is disconnected, so its "
+            "bus_inject records cannot be identified. Assert before "
+            "disconnecting the satellite."
+        )
     bus_injected = [
-        r for r in master.recorder.records
+        r for r in master.recorder.snapshot()
         if r.direction == "bus_inject" and r.msg_type == msg_type
-        and (peer is None or r.peer == peer)
+        and r.peer == peer
     ]
     if not bus_injected:
         raise AssertionError(
             f"assert_session_blacklists_injected: no bus_inject record for "
             f"'{msg_type}' at master (peer={peer!r}) — the message was not forwarded to the bus.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
     record = bus_injected[-1]
@@ -548,9 +601,22 @@ def assert_message_routed(
         msg_type: HiveMessageType name or value string (e.g. ``"BUS"`` or ``"bus"``).
         count: Expected number of messages.
         direction: Optional ``"in"`` or ``"out"`` filter.
-        timeout: Reserved for future async use.
+        timeout: Seconds to wait for the messages to arrive. Needed in
+            loopback mode, where messages land on the server thread.
     """
-    messages = node.recorder.records
+    # Wait until the expected count is reached or the timeout lapses.
+    deadline = time.monotonic() + timeout
+    while len(_find(node.recorder, msg_type, direction)) < count:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if not _find(node.recorder, msg_type, direction):
+            node.recorder.wait_for(msg_type, direction=direction,
+                                   timeout=remaining)
+        else:
+            time.sleep(min(0.02, remaining))
+
+    messages = node.recorder.snapshot()
     if direction:
         messages = [m for m in messages if m.direction == direction]
     matching = [m for m in messages if m.msg_type == msg_type]
@@ -558,7 +624,7 @@ def assert_message_routed(
         raise AssertionError(
             f"Expected {count} '{msg_type}' messages (direction={direction!r}), "
             f"got {len(matching)}.\n"
-            f"All messages: {[m.msg_type for m in node.recorder.records]}"
+            f"All messages: {[m.msg_type for m in node.recorder.snapshot()]}"
         )
 
 
@@ -620,7 +686,7 @@ def assert_query_routed(
         raise AssertionError(
             f"[PENDING] Expected {count} QUERY message(s) routed by master, "
             f"got {len(matches)}. QUERY routing is not yet in hivemind-core "
-            f"(core#74 / ws#88).\nAll records: {master.recorder.records}"
+            f"(core#74 / ws#88).\nAll records: {master.recorder.snapshot()}"
         )
 
 
@@ -687,7 +753,7 @@ def assert_rendezvous_handled(
         raise AssertionError(
             f"[PENDING] Expected {count} RENDEZVOUS message(s) at master, "
             f"got {len(matches)}. RENDEZVOUS routing pending (ws#103).\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
 
@@ -706,7 +772,7 @@ def assert_thirdparty_passed(
         raise AssertionError(
             f"Expected {count} THIRDPRTY message(s) (direction={direction!r}) "
             f"at '{node.recorder.name}', got {len(matches)}.\n"
-            f"All records: {node.recorder.records}"
+            f"All records: {node.recorder.snapshot()}"
         )
 
 
@@ -740,14 +806,14 @@ def assert_msg1_envelope(master: MasterNode, msg_type: str, count: int = 1) -> N
         count:     Minimum number of conformant injections required (default 1).
     """
     injected = [
-        r for r in master.recorder.records
+        r for r in master.recorder.snapshot()
         if r.direction == "bus_inject" and r.msg_type == msg_type
     ]
     if len(injected) < count:
         raise AssertionError(
             f"assert_msg1_envelope: expected at least {count} bus_inject record(s) "
             f"for '{msg_type}', found {len(injected)}.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
     errors: List[str] = []
     for r in injected:
@@ -790,13 +856,13 @@ def assert_source_stamped(
     """
     peer = satellite.peer
     my_records = [
-        r for r in master.recorder.records
+        r for r in master.recorder.snapshot()
         if r.direction == "bus_inject" and r.peer == peer
     ]
     if not my_records:
         raise AssertionError(
             f"assert_source_stamped: no bus_inject records from peer={peer!r}.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
     errors: List[str] = []
@@ -826,7 +892,7 @@ def assert_source_stamped(
         for other in other_satellites:
             other_peer = other.peer
             other_records = [
-                r for r in master.recorder.records
+                r for r in master.recorder.snapshot()
                 if r.direction == "bus_inject" and r.peer == other_peer
             ]
             for r in other_records:
@@ -883,7 +949,7 @@ def assert_destination_routed(
         raise AssertionError(
             f"assert_destination_routed: '{target_satellite.name}' did NOT receive "
             f"a '{msg_type}' message within {timeout}s.\n"
-            f"Records: {target_satellite.recorder.records}"
+            f"Records: {target_satellite.recorder.snapshot()}"
         )
 
     # A delayed misroute can land just after the target receipt; give it a
@@ -892,7 +958,7 @@ def assert_destination_routed(
     errors: List[str] = []
     for other in other_satellites:
         matches = [
-            r for r in other.recorder.records
+            r for r in other.recorder.snapshot()
             if r.direction == "in" and r.msg_type == msg_type
         ]
         if matches:
@@ -929,13 +995,13 @@ def assert_session_inbound_preserved(
     """
     peer = satellite.peer
     records = [
-        r for r in master.recorder.records
+        r for r in master.recorder.snapshot()
         if r.direction == "bus_inject" and r.peer == peer
     ]
     if not records:
         raise AssertionError(
             f"assert_session_inbound_preserved: no bus_inject records from "
-            f"peer={peer!r}.\nAll records: {master.recorder.records}"
+            f"peer={peer!r}.\nAll records: {master.recorder.snapshot()}"
         )
 
     record = records[-1]
@@ -982,7 +1048,7 @@ def assert_session_outbound_preserved(
         raise AssertionError(
             f"assert_session_outbound_preserved: '{satellite.name}' received no "
             f"inbound BUS message within {timeout}s.\n"
-            f"Records: {satellite.recorder.records}"
+            f"Records: {satellite.recorder.snapshot()}"
         )
 
     # payload for inbound BUS records is the raw _payload dict:
@@ -1033,7 +1099,7 @@ def assert_fifo_order(
     deadline = time.monotonic() + timeout
     while True:
         records = [
-            r for r in master.recorder.records
+            r for r in master.recorder.snapshot()
             if r.direction == "bus_inject" and r.peer == peer and r.msg_type == msg_type
         ]
         if len(records) >= count:
@@ -1043,7 +1109,7 @@ def assert_fifo_order(
         time.sleep(0.02)
 
     records = [
-        r for r in master.recorder.records
+        r for r in master.recorder.snapshot()
         if r.direction == "bus_inject" and r.peer == peer and r.msg_type == msg_type
     ][-count:]  # validate the most recent batch, not stale earlier traffic
 
@@ -1051,7 +1117,7 @@ def assert_fifo_order(
         raise AssertionError(
             f"assert_fifo_order: expected {count} '{msg_type}' bus_inject records "
             f"from peer={peer!r}, got {len(records)} after {timeout}s.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
     errors: List[str] = []
@@ -1071,14 +1137,15 @@ def assert_fifo_order(
                     f"followed by seq[{i}]={seqs[i]} (expected strictly increasing)"
                 )
     else:
-        # Fall back to timestamp order
-        timestamps = [r.timestamp for r in records]
-        for i in range(1, len(timestamps)):
-            if timestamps[i] < timestamps[i - 1]:
-                errors.append(
-                    f"FIFO reorder at position {i}: timestamp[{i-1}]={timestamps[i-1]:.6f} "
-                    f"followed by timestamp[{i}]={timestamps[i]:.6f}"
-                )
+        # Timestamps are stamped on arrival, so they are always ascending —
+        # checking them proves nothing. FIFO can only be verified with an
+        # explicit sequence marker set by the sender.
+        missing = [i for i, seq in enumerate(seqs) if seq is None]
+        raise AssertionError(
+            "assert_fifo_order: cannot verify FIFO without a '_fifo_seq' marker. "
+            f"Records at position(s) {missing} carry no data['_fifo_seq']. "
+            "Send each message with a strictly increasing data['_fifo_seq'] value."
+        )
 
     if errors:
         raise AssertionError(
@@ -1108,14 +1175,14 @@ def assert_session_propagated_unchanged(
         msg_type:  Optional OVOS message type to filter records.
     """
     records = [
-        r for r in master.recorder.records
+        r for r in master.recorder.snapshot()
         if r.direction == "bus_inject"
         and (msg_type is None or r.msg_type == msg_type)
     ]
     if not records:
         raise AssertionError(
             f"assert_session_propagated_unchanged: no bus_inject records "
-            f"(msg_type={msg_type!r}).\nAll records: {master.recorder.records}"
+            f"(msg_type={msg_type!r}).\nAll records: {master.recorder.snapshot()}"
         )
 
     errors: List[str] = []
@@ -1164,7 +1231,7 @@ def assert_source_hidden(
         raise AssertionError(
             f"assert_source_hidden: '{satellite.name}' received no inbound "
             f"'{mt}' message within {timeout}s.\n"
-            f"Records: {satellite.recorder.records}"
+            f"Records: {satellite.recorder.snapshot()}"
         )
 
     payload = recv.payload if isinstance(recv.payload, dict) else {}

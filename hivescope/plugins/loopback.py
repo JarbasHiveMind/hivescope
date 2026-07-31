@@ -45,6 +45,8 @@ class LoopbackNetworkProtocol(NetworkProtocol):
     _loop: Optional[asyncio.AbstractEventLoop] = field(default=None, init=False, repr=False)
     _thread: Optional[threading.Thread] = field(default=None, init=False, repr=False)
     _clients: List[Any] = field(default_factory=list, init=False, repr=False)
+    _ready: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
+    _startup_error: Optional[BaseException] = field(default=None, init=False, repr=False)
 
     @property
     def url(self) -> str:
@@ -73,20 +75,21 @@ class LoopbackNetworkProtocol(NetworkProtocol):
             _LOG.warning("LoopbackNetworkProtocol.run() called but server already running")
             return
 
+        self._ready.clear()
+        self._startup_error = None
+
         # Start background thread
         self._thread = threading.Thread(target=self._run_server, daemon=True)
         self._thread.start()
 
-        # Wait for server to start and URL to be available
-        max_wait = 10  # seconds
-        for _ in range(int(max_wait * 100)):
-            if self._url is not None:
-                _LOG.info(f"LoopbackNetworkProtocol listening at {self._url}")
-                return
-            import time
-            time.sleep(0.01)
-
-        raise RuntimeError("LoopbackNetworkProtocol failed to start server after 10s")
+        # Wait for the server to bind, or for startup to fail
+        if not self._ready.wait(timeout=10):
+            raise RuntimeError("LoopbackNetworkProtocol failed to start server after 10s")
+        if self._startup_error is not None:
+            raise RuntimeError(
+                "LoopbackNetworkProtocol failed to start server"
+            ) from self._startup_error
+        _LOG.info(f"LoopbackNetworkProtocol listening at {self._url}")
 
     def _run_server(self):
         """Background thread: run asyncio WebSocket server.
@@ -98,33 +101,50 @@ class LoopbackNetworkProtocol(NetworkProtocol):
 
         try:
             # Run the server coroutine and keep it alive
-            self._server_task = self._loop.run_until_complete(self._start_server())
+            self._server = self._loop.run_until_complete(self._start_server())
+            self._ready.set()
             # Now run the event loop indefinitely (handles incoming connections)
             self._loop.run_forever()
         except Exception as e:
             _LOG.exception(f"LoopbackNetworkProtocol server error: {e}")
+            # Record the real cause so run() can re-raise it instead of a
+            # generic "failed to start" after the full wait.
+            self._startup_error = e
+            self._ready.set()
+        finally:
+            self._shutdown_loop()
+
+    def _shutdown_loop(self):
+        """Close the listening socket, drain tasks, then close the loop."""
+        server = self._server
+        self._server = None
+        if server is not None:
+            try:
+                server.close()
+                self._loop.run_until_complete(server.wait_closed())
+            except Exception as exc:
+                _LOG.warning(f"LoopbackNetworkProtocol: closing server failed: {exc}")
+        try:
+            pending = [t for t in asyncio.all_tasks(self._loop) if not t.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                self._loop.run_until_complete(
+                    asyncio.wait_for(
+                        asyncio.gather(*pending, return_exceptions=True),
+                        timeout=5,
+                    )
+                )
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            _LOG.warning("LoopbackNetworkProtocol: pending tasks did not finish in 5s")
+        except Exception as exc:
+            _LOG.warning(f"LoopbackNetworkProtocol: task cleanup failed: {exc}")
         finally:
             try:
-                # Cancel the server task if still running
-                if hasattr(self, '_server_task') and self._server_task:
-                    self._server_task.cancel()
-                    try:
-                        self._loop.run_until_complete(self._server_task)
-                    except asyncio.CancelledError:
-                        pass
-                # Close all pending tasks
-                pending = asyncio.all_tasks(self._loop)
-                for task in pending:
-                    task.cancel()
-                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            except Exception:
-                pass
-            finally:
-                try:
-                    self._loop.close()
-                except Exception:
-                    pass
-                self._loop = None
+                self._loop.close()
+            except Exception as exc:
+                _LOG.warning(f"LoopbackNetworkProtocol: closing loop failed: {exc}")
+            self._loop = None
 
     async def _start_server(self):
         """Start and manage the WebSocket server.
@@ -320,8 +340,13 @@ class LoopbackNetworkProtocol(NetworkProtocol):
         if self._thread is not None:
             # Wait for thread to finish (give it time to clean up)
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                _LOG.warning(
+                    "LoopbackNetworkProtocol: server thread still alive after 5s; "
+                    "the event loop or a client handler did not stop"
+                )
             self._thread = None
 
         self._url = None
-        self._server_task = None
+        self._ready.clear()
         self._clients.clear()

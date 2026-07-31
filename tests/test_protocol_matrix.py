@@ -81,12 +81,17 @@ def test_public_api_importable():
 
 
 def test_recorder_messages_alias():
-    """MessageRecorder.messages is an alias for .records."""
+    """MessageRecorder.messages returns a snapshot of .records."""
     from hivescope.recorder import MessageRecorder
     r = MessageRecorder("test")
     r.record("in", "bus", {}, "peer1")
-    assert r.messages is r.records
-    assert len(r.messages) == 1
+    assert r.messages == r.records
+    # A snapshot, not the live list: appending later must not mutate it.
+    assert r.messages is not r.records
+    snap = r.messages
+    r.record("in", "bus", {}, "peer2")
+    assert len(snap) == 1
+    assert len(r.messages) == 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────

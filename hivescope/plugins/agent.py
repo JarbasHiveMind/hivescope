@@ -76,9 +76,24 @@ class TestAgentProtocol(AgentProtocol):
     # Streams speak replies correlated by a fresh query_id (query-scoped
     # session keeps them from being reverse-routed to the satellite).
     # -----------------------------------------------------------------------
-    def natural_language_query(self, utterance: str, lang: str):
+    def natural_language_query(self, utterance: str, lang: str,
+                               timeout: float = 2.0):
         """Stream speak replies from the test bus, correlated by a fresh
-        query-scoped session (short timeout for tests)."""
+        query-scoped session.
+
+        Yields each answer chunk, then a final ``None`` end-of-query sentinel
+        once ``ovos.utterance.handled`` arrives.
+
+        Args:
+            utterance: The query text.
+            lang:      BCP-47 language tag.
+            timeout:   Seconds to wait for the next chunk.
+
+        Raises:
+            TimeoutError: No chunk and no end-of-query within *timeout*. A
+                stalled agent is a test failure, not a clean empty answer —
+                a clean empty answer yields ``None`` immediately.
+        """
         import queue
         import uuid
         qid = uuid.uuid4().hex
@@ -112,10 +127,13 @@ class TestAgentProtocol(AgentProtocol):
             ))
             while True:
                 try:
-                    chunk = q.get(timeout=2.0)
+                    chunk = q.get(timeout=timeout)
                 except queue.Empty:
-                    yield None
-                    return
+                    raise TimeoutError(
+                        f"TestAgentProtocol.natural_language_query: no reply "
+                        f"chunk and no 'ovos.utterance.handled' within "
+                        f"{timeout}s for utterance {utterance!r}"
+                    )
                 if chunk is None:
                     yield None
                     return
