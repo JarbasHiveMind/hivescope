@@ -35,6 +35,11 @@ dependencies = [
     "ovos-utils>=0.0.40",
     "pytest>=7.4",
     "websockets>=11",
+    # DROPPABLE once hivemind-websocket-protocol releases with its dev-branch
+    # unpinned pyOpenSSL: the released wheel pins pyopenssl==22.0.0, whose
+    # loose floor lets cryptography float to >=42 where the bindings that
+    # pyOpenSSL 22 needs (e.g. GEN_EMAIL) no longer exist.
+    "cryptography<42",
 ]
 
 [project.optional-dependencies]
