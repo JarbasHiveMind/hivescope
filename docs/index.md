@@ -55,7 +55,7 @@ The entire simulation runtime lives in `hivescope/`: topology builder, node type
 | `wait_for(msg_type, timeout=5)` | Block until a HiveMessage of that type is recorded |
 | `connected_peers()` | `List[str]` of currently connected peer identifiers |
 | `recorder` | `MessageRecorder` for all inbound/outbound HiveMessages |
-| `database` | `InMemoryClientDatabase` |
+| `db` | `InMemoryClientDatabase` |
 
 ## SatelliteNode
 
@@ -63,14 +63,15 @@ The entire simulation runtime lives in `hivescope/`: topology builder, node type
 
 | Method / Attribute | Notes |
 |---|---|
-| `connect(master, timeout=10)` | Connect to a MasterNode and perform handshake |
+| `connect(master, is_admin=False, can_escalate=True, can_propagate=True, can_broadcast=True, allowed_types=None, msg_blacklist=None, skill_blacklist=None, intent_blacklist=None)` | Connect to a MasterNode and perform handshake synchronously; raises `RuntimeError` if the handshake does not complete. There is no `timeout` kwarg — to wait for a handshake that completes asynchronously (loopback mode), use `wait_for_handshake(timeout)` below |
+| `wait_for_handshake(timeout=5.0)` | Block until the handshake completes; returns `True` if it did, `False` on timeout |
 | `disconnect()` | Disconnect cleanly |
 | `send(message)` | Send a `HiveMessage` or `Message` upstream |
 | `wait_for(msg_type, timeout=5)` | Block until a HiveMessage of that type is recorded |
 | `wait_for_bus(ovos_type, timeout=5)` | Block until an OVOS bus Message is received |
 | `peer` | This satellite's peer identifier (set after handshake) |
 | `recorder` | `MessageRecorder` for all inbound/outbound HiveMessages |
-| `crypto_key` | Negotiated session key (set after handshake) |
+| `shim.crypto_key` | Negotiated session key (set after handshake); lives on the `InProcessHiveShim`, not directly on `SatelliteNode` |
 
 ## RelayNode
 
@@ -85,13 +86,13 @@ A thin wrapper that holds both a `MasterNode` (`.hm_protocol`) and a `SatelliteN
 | Method | Notes |
 |---|---|
 | `record(direction, msg_type, payload, peer)` | Called internally by node instrumentation |
-| `wait_for(msg_type, direction=None, timeout=5)` | Block until message found; raises `TimeoutError` |
+| `wait_for(msg_type, direction=None, timeout=5)` | Block until message found; returns the `RecordedMessage`, or `None` on timeout |
 | `assert_received(msg_type, count=1, direction=None)` | Raises `AssertionError` if count does not match |
 | `assert_not_received(msg_type, direction=None)` | Raises `AssertionError` if message was seen |
-| `received(msg_type, direction=None)` | `bool` — whether at least one matching message exists |
+| `received(msg_type, direction=None)` | `List[RecordedMessage]` — all matching records (empty list if none) |
 | `clear()` | Reset all recorded messages |
 
-`RecordedMessage` attributes: `direction` (`"inbound"` or `"outbound"`), `msg_type`, `payload`, `peer`, `timestamp`.
+`RecordedMessage` attributes: `direction` (`"in"`, `"out"`, or `"bus_inject"`), `msg_type`, `payload`, `peer`, `timestamp`.
 
 ## InMemoryClientDatabase
 
@@ -101,25 +102,66 @@ Implements the HiveMind client database interface backed by a plain dict. Used a
 
 | Method | Notes |
 |---|---|
-| `add_client(name, key, password, **kwargs)` | Register a new client credential |
+| `add_client(name, key="", admin=False, ..., password=None, ...)` | Register a new client credential. The 3rd positional argument is `admin`, not `password` — `password` is much further down the signature, so pass it as a keyword (`password="..."`) or it will silently land in `admin` and register the client as an admin |
 | `get_client_by_api_key(api_key)` | Look up a `Client` by key |
 | `delete_client(key)` | Remove a credential |
 | `total_clients()` | Count of registered clients |
 
 ## Assertion Helpers
 
-`hivescope/assertions.py`
+`hivescope/assertions.py`. All functions below are exported from `hivescope.assertions`; most are also re-exported from `hivescope` directly (see `__all__`).
+
+### Core / generic
 
 | Function | Notes |
 |---|---|
-| `assert_handshake_complete(master, satellite, timeout=5)` | Verifies crypto_key set on both sides and satellite is in connected_peers |
+| `assert_message_routed(node, msg_type, count=1, direction=None, timeout=2.0)` | Waits (up to `timeout`) then asserts the recorded count matches |
+| `assert_message_received_by(node, msg_type, count=1)` | Shorthand for `assert_message_routed(..., direction="in")` |
+| `assert_message_sent_by(node, msg_type, count=1)` | Shorthand for `assert_message_routed(..., direction="out")` |
+| `assert_client_registered(master, peer)` | Asserts `peer` is in master's live `connected_peers()` — not a database lookup |
+| `assert_client_not_registered(master, peer)` | Asserts `peer` is absent from `connected_peers()` |
+
+### Type-specific (implemented message types)
+
+| Function | Notes |
+|---|---|
+| `assert_handshake_complete(master, satellite, timeout=5)` | Verifies `satellite.shim.crypto_key` is set, the handshake event fired, and the satellite is in `connected_peers()` |
 | `assert_encryption_match(master, satellite)` | Verifies cipher and encoding agree between master and satellite |
-| `assert_message_routed(node, msg_type, count, direction=None, timeout=5)` | Waits then checks recorder count |
-| `assert_acl_enforced(master, satellite, msg_type, allowed=False)` | ACL enforcement check (placeholder for full policy testing) |
-| `assert_client_registered(master, peer)` | Asserts peer is in master's database |
-| `assert_client_not_registered(master, peer)` | Asserts peer is absent from master's database |
-| `assert_message_received_by(node, msg_type, count=1)` | Shorthand for inbound direction check |
-| `assert_message_sent_by(node, msg_type, count=1)` | Shorthand for outbound direction check |
+| `assert_hello_received(master, count=1)` | Asserts master recorded `count` inbound HELLO announcements |
+| `assert_bus_message_routed(master, count=1)` | Asserts `count` BUS messages reached the master's agent bus |
+| `assert_shared_bus_received(node, count=1, direction=None)` | Asserts `node` recorded `count` SHARED_BUS messages |
+| `assert_broadcast_delivered(*recipients, count=1, inner_msg_type=None)` | Asserts every node in `recipients` received the broadcast; core unwraps BROADCAST into its inner type, so this counts inbound payload messages unless `inner_msg_type` narrows it |
+| `assert_broadcast_blocked(node)` | Asserts `node` received no BROADCAST (ACL-blocked case) |
+| `assert_propagate_delivered(*recipients, count=1)` | Asserts every node in `recipients` recorded `count` inbound PROPAGATE messages |
+| `assert_escalate_delivered(master, count=1)` | Asserts master received `count` inbound ESCALATE messages |
+| `assert_intercom_delivered(recipient, count=1)` | Asserts `recipient` satellite received `count` inbound INTERCOM messages |
+| `assert_binary_delivered(master, expected_payload=None, count=1)` | Asserts master received `count` BINARY messages; if `expected_payload` is given, also checks it was actually delivered |
+| `assert_query_routed(master, count=1)` | PENDING — QUERY routing not yet in hivemind-core ([core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88)); use with `@pytest.mark.xfail(strict=False)` |
+| `assert_cascade_routed(*nodes, count=1)` | PENDING — CASCADE routing not yet in hivemind-core (core#74 / ws#88); xfail |
+| `assert_ping_responded(master, satellite)` | PENDING (partial) — PING network-map round-trip not fully implemented (core#74); xfail |
+| `assert_rendezvous_handled(master, count=1)` | PENDING — RENDEZVOUS not yet implemented ([ws#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103)); xfail |
+| `assert_thirdparty_passed(node, count=1, direction=None)` | Asserts `count` THIRDPRTY (user-land passthrough) messages at `node`; verify routing status against `LIBRARY.md` before relying on this |
+
+### OVOS-BRIDGE-1 / SESSION-1 conformance
+
+| Function | Notes |
+|---|---|
+| `assert_msg1_envelope(master, msg_type, count=1)` | BRIDGE-1 §2: every bus-injected message of `msg_type` has a non-empty `msg_type` and a `context` dict |
+| `assert_source_stamped(master, satellite, other_satellites=None)` | BRIDGE-1 §3.1: inbound bus messages from `satellite` carry a stable, non-empty `context.source`; if `other_satellites` is given, their sources must differ |
+| `assert_destination_routed(master, target_satellite, other_satellites, msg_type, timeout=2.0)` | BRIDGE-1 §3.2: an outbound message reaches only `target_satellite`, never `other_satellites` |
+| `assert_session_inbound_preserved(master, satellite, expected_session)` | BRIDGE-1 §4.1 (inbound): the satellite's session lands unchanged in the bus-injected message's `context.session` |
+| `assert_session_outbound_preserved(satellite, expected_session, timeout=2.0)` | BRIDGE-1 §4.1 (outbound): a bus-originated session reaches the satellite unchanged |
+| `assert_fifo_order(master, satellite, msg_type, count, timeout=5.0)` | BRIDGE-1 §5: `count` sequential messages from `satellite` arrive in send order; requires the sender to stamp a monotonically increasing `data["_fifo_seq"]` on each message |
+| `assert_session_propagated_unchanged(master, field, value, msg_type=None)` | SESSION-1 §4: every bus-injected message (optionally filtered by `msg_type`) has `context.session[field] == value` |
+| `assert_source_hidden(satellite, generic_id="hive", msg_type=None, timeout=2.0)` | BRIDGE-1 §6 (optional): outbound `context.source` is overwritten with `generic_id` instead of an internal peer address |
+
+### Policy / session (ACL enforcement)
+
+| Function | Notes |
+|---|---|
+| `assert_acl_enforced(master, satellite, msg_type, allowed=False)` | Fully implemented ACL enforcement check. `allowed=False` (default) verifies the satellite received a `hive.policy.denied` response; `allowed=True` verifies the message was recorded at master's `bus_inject` level |
+| `assert_policy_denied(master, satellite, msg_type, deny_code=None)` | Asserts `satellite` received a `hive.policy.denied` response for `msg_type`; if `deny_code` is given, checks the denial carries that stable code (e.g. `"acl_disallowed_type"`) |
+| `assert_session_blacklists_injected(master, satellite, msg_type, expected_skills=None, expected_intents=None)` | Asserts the policy chain injected the expected `blacklisted_skills` / `blacklisted_intents` into the session of a bus-injected message |
 
 ## Preset Scenarios
 
@@ -145,21 +187,27 @@ All functions return a fully wired (not yet started) `TopologyBuilder`.
 | Fixture | Yields | Scope |
 |---|---|---|
 | `topology` | `TopologyBuilder` (started, auto-stopped) | function |
-| `master_node` | `MasterNode` in a started topology | function |
+| `master_node` | `MasterNode` in a started single-master topology (no satellite attached) | function |
 | `satellite_node` | `SatelliteNode` connected to `master_node` | function |
 | `admin_satellite` | Satellite with full permissions | function |
 | `restricted_satellite` | Satellite with ACL restrictions | function |
 
 ## Templates
 
-`templates/` contains four ready-to-copy test files. Drop them into `tests/e2e/` and rename:
+`templates/` contains ten ready-to-copy test files. Drop them into `tests/e2e/` and rename:
 
 | File | Tests |
 |---|---|
 | `test_template_handshake.py` | Handshake completion, cipher/encoding agreement |
 | `test_template_routing.py` | Message routing through master |
-| `test_template_acl.py` | ACL enforcement for restricted vs admin satellites |
+| `test_template_acl.py` | ACL enforcement: `allowed_types` denial and skill-blacklist injection |
 | `test_template_binary.py` | Binary protocol message handling |
+| `test_template_bridge1.py` | OVOS-BRIDGE-1 / SESSION-1 / SESSION-2 conformance — source stamping, destination routing, session fidelity, FIFO order |
+| `test_template_cascade.py` | CASCADE routing — pending core support ([core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88)), marked xfail |
+| `test_template_ping.py` | PING network-map round-trip — partially implemented (core#74), marked xfail |
+| `test_template_query.py` | QUERY routing — pending core support (core#74 / ws#88), marked xfail |
+| `test_template_rendezvous.py` | RENDEZVOUS handling — pending ([ws#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103)), marked xfail |
+| `test_template_thirdparty.py` | THIRDPRTY (user-land) passthrough routing |
 
 ## Contents
 

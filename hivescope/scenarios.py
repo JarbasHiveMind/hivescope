@@ -237,15 +237,15 @@ def hierarchical_hubs(num_levels: int = 3, sats_per_relay: int = 2) -> TopologyB
     return b
 
 
-def with_multiple_agent_protocols() -> TopologyBuilder:
+def with_multiple_agent_protocols(agent_protocol: Optional[TestAgentProtocol] = None) -> TopologyBuilder:
     """
     Topology where master uses a custom agent protocol.
 
     Useful for testing agent protocol implementations.
 
-    (Default: TestAgentProtocol; can be overridden by caller)
+    (Default: TestAgentProtocol; can be overridden by caller via ``agent_protocol``)
     """
     b = TopologyBuilder()
-    m = b.add_master("M0")
+    m = b.add_master("M0", agent_protocol=agent_protocol)
     b.add_satellite("S0", upstream=m)
     return b

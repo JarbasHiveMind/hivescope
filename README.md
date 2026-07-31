@@ -63,7 +63,7 @@ Then use the provided fixtures in tests:
 def test_message_forwarded(master_node, satellite_node):
     from ovos_bus_client.message import Message
     satellite_node.send(Message("test:ping", {}))
-    master_node.recorder.assert_received("BUS", count=1)
+    master_node.recorder.assert_received("bus", count=1)
 ```
 
 ### ACL enforcement test
@@ -72,7 +72,7 @@ def test_message_forwarded(master_node, satellite_node):
 def test_acl_denied(master_node, restricted_satellite):
     from ovos_bus_client.message import Message
     restricted_satellite.send(Message("admin:command", {}))
-    master_node.recorder.assert_not_received("BUS")
+    master_node.recorder.assert_not_received("bus")
 ```
 
 ---
@@ -118,13 +118,16 @@ Every node has a `.recorder` that captures all inbound and outbound `HiveMessage
 
 ```python
 # Assert a BUS message was received exactly once
-master_node.recorder.assert_received("BUS", count=1)
+master_node.recorder.assert_received("bus", count=1)
 
 # Assert it was NOT received
-master_node.recorder.assert_not_received("PROPAGATE")
+master_node.recorder.assert_not_received("propagate")
 
-# Block until a message arrives (raises TimeoutError on timeout)
-master_node.wait_for("HANDSHAKE", timeout=5)
+# Block until a message arrives; returns the RecordedMessage, or None on timeout
+master_node.wait_for("shake", timeout=5)
+
+# For a test that should fail on timeout, use assert_received instead:
+master_node.recorder.assert_received("shake", count=1)
 
 # Inspect recorded messages
 for msg in master_node.recorder.messages:
@@ -140,7 +143,7 @@ Enable in `conftest.py`: `pytest_plugins = ['hivescope.pytest_fixtures']`
 | Fixture | Scope | Yields |
 |---|---|---|
 | `topology` | function | Started `TopologyBuilder` (auto-stopped) |
-| `master_node` | function | `MasterNode` in a started single-satellite topology |
+| `master_node` | function | `MasterNode` in a started single-master topology (no satellite attached) |
 | `satellite_node` | function | `SatelliteNode` connected to `master_node` |
 | `admin_satellite` | function | Satellite with full permissions |
 | `restricted_satellite` | function | Satellite with ACL restrictions |
@@ -155,8 +158,16 @@ Enable in `conftest.py`: `pytest_plugins = ['hivescope.pytest_fixtures']`
 |---|---|
 | `test_template_handshake.py` | Cipher/encoding agreement, handshake completion |
 | `test_template_routing.py` | Message routing through master |
-| `test_template_acl.py` | ACL enforcement for restricted vs admin satellites |
+| `test_template_acl.py` | ACL enforcement: `allowed_types` denial and skill-blacklist injection |
 | `test_template_binary.py` | Binary protocol message handling |
+| `test_template_bridge1.py` | OVOS-BRIDGE-1 / SESSION-1 conformance — source stamping, destination routing, session fidelity, FIFO order |
+| `test_template_cascade.py` | CASCADE routing — pending core support, marked xfail |
+| `test_template_ping.py` | PING network-map round-trip — partially implemented, marked xfail |
+| `test_template_query.py` | QUERY routing — pending core support, marked xfail |
+| `test_template_rendezvous.py` | RENDEZVOUS handling — pending, marked xfail |
+| `test_template_thirdparty.py` | THIRDPRTY (user-land) passthrough routing |
+
+See [docs/index.md](docs/index.md#templates) for tracking links on the pending items.
 
 ---
 

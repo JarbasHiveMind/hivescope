@@ -75,6 +75,22 @@ def test_scenario_presets_construct(builder):
     assert isinstance(b, TopologyBuilder)
 
 
+def test_with_multiple_agent_protocols_accepts_override():
+    """with_multiple_agent_protocols() lets the caller supply the agent
+    protocol, matching what the docstring promises ("can be overridden by
+    caller"). Default behavior (no arg) is unchanged."""
+    custom_agent = _TestAgentProtocol()
+    b = scenarios.with_multiple_agent_protocols(agent_protocol=custom_agent)
+    m = b.get_master("M0")
+    assert m.agent_protocol is custom_agent
+
+    # Default (no override) still builds a topology with its own agent protocol.
+    b_default = scenarios.with_multiple_agent_protocols()
+    m_default = b_default.get_master("M0")
+    assert isinstance(m_default.agent_protocol, _TestAgentProtocol)
+    assert m_default.agent_protocol is not custom_agent
+
+
 def test_with_relay_preset_starts():
     """The relay preset wires both satellites under the relay listener."""
     b = scenarios.with_relay()
