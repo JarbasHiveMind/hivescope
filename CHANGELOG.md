@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.4a1](https://github.com/JarbasHiveMind/hivescope/tree/0.6.4a1) (2026-07-31)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.3a1...0.6.4a1)
+
+**Merged pull requests:**
+
+- fix: a failed loopback run\(\) marks the instance broken [\#44](https://github.com/JarbasHiveMind/hivescope/pull/44) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.6.3a1](https://github.com/JarbasHiveMind/hivescope/tree/0.6.3a1) (2026-07-31)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.2a1...0.6.3a1)
