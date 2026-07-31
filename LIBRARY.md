@@ -137,6 +137,7 @@ from hivescope import (
     assert_bus_message_routed, assert_hello_received,
     assert_broadcast_delivered, assert_broadcast_blocked,
     assert_propagate_delivered, assert_escalate_delivered,
+    assert_intercom_delivered, assert_shared_bus_received,
     assert_binary_delivered,
     # Scenario builders
     single_satellite, admin_satellite, three_satellites,
@@ -145,11 +146,11 @@ from hivescope import (
 )
 ```
 
-Type-specific pending helpers live in `hivescope.assertions`:
+Type-specific pending helpers live in `hivescope.assertions` (not re-exported at
+top level; import them directly):
 
 ```python
 from hivescope.assertions import (
-    assert_intercom_delivered, assert_shared_bus_received,
     assert_query_routed, assert_cascade_routed,
     assert_ping_responded, assert_rendezvous_handled, assert_thirdparty_passed,
 )
