@@ -269,8 +269,9 @@ def plot_hive_mapper(
 
     Each node discovered via PONG becomes a graph vertex; edges come from
     the route hops embedded in each PONG.  The *root_peer* (PING originator)
-    is highlighted in red.  RTT in milliseconds is shown as a node annotation
-    when available.
+    is highlighted in red.  Estimated one-way latency in milliseconds
+    (``NodeInfo.latency_ms``, a clock-difference estimate) is shown as a
+    node annotation when available.
 
     Args:
         hive_mapper: A :class:`~hivemind_core.hive_map.HiveMapper` instance.
@@ -288,7 +289,8 @@ def plot_hive_mapper(
     G = nx.DiGraph()
 
     for peer, info in hive_mapper.nodes.items():
-        rtt_str = f"  {info.rtt_ms:.0f}ms" if info.rtt_ms is not None else ""
+        latency_ms = info.latency_ms
+        rtt_str = f"  {latency_ms:.0f}ms" if latency_ms is not None else ""
         site_str = f"\n({info.site_id})" if info.site_id else ""
         label = f"{peer}{site_str}{rtt_str}"
         if peer == root_peer:
