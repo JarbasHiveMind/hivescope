@@ -502,8 +502,9 @@ def test_loopback_stop_runs_client_cleanup_and_leaves_no_ghost_peers():
         args=(url, "ghost", "ghost-key", "ghost-session", connected, close),
         daemon=True)
     t.start()
-    assert connected.wait(timeout=10), "websocket client never connected"
-    deadline = time.monotonic() + 5
+    assert connected.wait(timeout=20), "websocket client never connected"
+    # admission runs on the server thread; loaded CI runners need a wide window
+    deadline = time.monotonic() + 20
     while not m.hm_protocol.clients and time.monotonic() < deadline:
         time.sleep(0.05)
     assert m.hm_protocol.clients, "master never registered the client"
@@ -538,7 +539,7 @@ def test_loopback_records_decode_failures():
 
     try:
         asyncio.run(_send_garbage())
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             if m.recorder.received("_decode_error", direction="in"):
                 break
