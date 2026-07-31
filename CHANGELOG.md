@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1a3](https://github.com/JarbasHiveMind/hivescope/tree/0.6.1a3) (2026-07-31)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.1a2...0.6.1a3)
+
+**Merged pull requests:**
+
+- docs: rewrite README in Simplified Technical English [\#38](https://github.com/JarbasHiveMind/hivescope/pull/38) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.6.1a2](https://github.com/JarbasHiveMind/hivescope/tree/0.6.1a2) (2026-07-31)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.1a1...0.6.1a2)
