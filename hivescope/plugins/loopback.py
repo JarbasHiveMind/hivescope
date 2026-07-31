@@ -162,13 +162,23 @@ class LoopbackNetworkProtocol(NetworkProtocol):
         self._thread = threading.Thread(target=self._run_server, daemon=True)
         self._thread.start()
 
-        # Wait for the server to bind, or for startup to fail
-        if not self._ready.wait(timeout=10):
-            raise RuntimeError("LoopbackNetworkProtocol failed to start server after 10s")
-        if self._startup_error is not None:
-            raise RuntimeError(
-                "LoopbackNetworkProtocol failed to start server"
-            ) from self._startup_error
+        # Wait for the server to bind, or for startup to fail. On failure,
+        # mark the instance broken and deregister its floor — leaving
+        # `_thread` set would make a retrying `run()` silently no-op on the
+        # "already running" guard, hiding the original error behind a later
+        # "url not available" complaint far from the cause.
+        try:
+            if not self._ready.wait(timeout=10):
+                raise RuntimeError(
+                    "LoopbackNetworkProtocol failed to start server after 10s")
+            if self._startup_error is not None:
+                raise RuntimeError(
+                    "LoopbackNetworkProtocol failed to start server"
+                ) from self._startup_error
+        except Exception:
+            self._broken = True
+            _LIVE_FLOORS.pop(id(self), None)
+            raise
         _LOG.info(f"LoopbackNetworkProtocol listening at {self._url}")
 
     def _run_server(self):
