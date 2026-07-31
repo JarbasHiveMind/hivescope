@@ -25,7 +25,7 @@ pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@master"
 | BINARY | `bin` | `assert_binary_delivered` | `test_template_binary.py` | **ready** |
 | QUERY | `query` | `assert_query_routed` | `test_template_query.py` | **pending** — [core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88) |
 | CASCADE | `cascade` | `assert_cascade_routed` | `test_template_cascade.py` | **pending** — [core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88) |
-| PING | `ping` | `assert_ping_responded` | `test_template_ping.py` | **pending (partial)** — [core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) |
+| PING | `ping` | `assert_ping_responded` | `test_template_ping.py` | **ready** — send `PROPAGATE(PING)`; a bare PING is not routed |
 | RENDEZVOUS | `rendezvous` | `assert_rendezvous_handled` | `test_template_rendezvous.py` | **pending** — [ws#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103) |
 | THIRDPRTY | `3rdparty` | `assert_thirdparty_passed` | `test_template_thirdparty.py` | **verify** — passthrough; routing status TBD |
 
@@ -169,7 +169,7 @@ pytest_plugins = ['hivescope.pytest_fixtures']
 
 | PR | Type | Action |
 |---|---|---|
-| [hivemind-core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) | QUERY, CASCADE, PING | Remove `xfail` in templates + tests; implement response assertions |
+| [hivemind-core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) | QUERY, CASCADE | Remove `xfail` in templates + tests; implement response assertions |
 | [hivemind-websocket-client#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88) | QUERY, CASCADE | Remove `xfail` in templates + tests |
 | [hivemind-websocket-client#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103) | RENDEZVOUS | Remove `xfail`; add rendezvous-node fixture to topology |
 | THIRDPRTY verify | THIRDPRTY | Run test; if passes, remove xfail; if not routed, add xfail with issue ref |
