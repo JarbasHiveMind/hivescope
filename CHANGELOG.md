@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.1a3](https://github.com/JarbasHiveMind/hivescope/tree/0.6.1a3) (2026-07-31)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.1a2...0.6.1a3)
 
 **Han audit round 2:**
 
@@ -67,17 +69,17 @@
 
 **Docs:**
 
-- docs: correct API reference and examples to match code (Han audit round 1) — fixed
-  `wait_for()` return-value documentation, lowercase `HiveMessageType` values in
-  quick-start examples, `master_node` fixture wording, `SatelliteNode.connect()`
-  signature, `satellite.shim.crypto_key` location, `MasterNode.db` attribute name,
-  `MessageRecorder.received()` return type, recorded-message direction values,
-  `InMemoryClientDatabase.add_client()` signature, the full list of 10 templates,
-  moved `assert_intercom_delivered`/`assert_shared_bus_received` out of the pending
-  list, corrected `assert_acl_enforced`/`assert_client_registered` descriptions, and
-  expanded the assertion-helper table to cover all public helpers
-- fix(scenarios): `with_multiple_agent_protocols()` now accepts an optional
-  `agent_protocol` keyword, matching its documented intent
+**Merged pull requests:**
+
+- docs: rewrite README in Simplified Technical English [\#38](https://github.com/JarbasHiveMind/hivescope/pull/38) ([JarbasAl](https://github.com/JarbasAl))
+
+## [0.6.1a2](https://github.com/JarbasHiveMind/hivescope/tree/0.6.1a2) (2026-07-31)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.1a1...0.6.1a2)
+
+**Merged pull requests:**
+
+- docs: correct API reference and examples to match code \(Han audit round 1\) [\#35](https://github.com/JarbasHiveMind/hivescope/pull/35) ([JarbasAl](https://github.com/JarbasAl))
 
 ## [0.6.1a1](https://github.com/JarbasHiveMind/hivescope/tree/0.6.1a1) (2026-07-31)
 
