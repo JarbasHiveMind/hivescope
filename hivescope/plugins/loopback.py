@@ -57,6 +57,11 @@ class LoopbackNetworkProtocol(NetworkProtocol):
     recorder: Optional[Any] = field(default=None)
     #: Seconds given to live client handlers to finish during stop().
     shutdown_grace: float = field(default=2.0)
+    #: Wire-protocol floor written into the isolated server config before the
+    #: server starts. hivemind-core defaults to 2 (HIVEMIND-WIRE-1 §2), which
+    #: rejects the plain-JSON password-less clients this harness exists to
+    #: test (they top out at v1). Set higher in a test to exercise the floor.
+    min_protocol_version: int = field(default=1)
 
     @property
     def url(self) -> str:
@@ -90,6 +95,20 @@ class LoopbackNetworkProtocol(NetworkProtocol):
         if self._thread is not None:
             _LOG.warning("LoopbackNetworkProtocol.run() called but server already running")
             return
+
+        # Persist the harness protocol floor into the (session-isolated) XDG
+        # server config BEFORE handle_new_client() runs its version gate —
+        # without this, released hivemind-core (floor 2) silently rejects the
+        # raw JSON clients right after they connect and the peer never shows
+        # up in hm_protocol.clients.
+        try:
+            from hivemind_core.config import get_server_config
+            cfg = get_server_config()
+            if cfg.get("min_protocol_version") != self.min_protocol_version:
+                cfg["min_protocol_version"] = self.min_protocol_version
+                cfg.store()
+        except Exception as e:  # config module moved/absent — fail loudly later
+            _LOG.warning(f"could not set min_protocol_version in server config: {e}")
 
         self._ready.clear()
         self._startup_error = None
