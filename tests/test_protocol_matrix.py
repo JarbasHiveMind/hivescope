@@ -399,17 +399,44 @@ def test_cascade_routed():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PENDING — PING
+# PING — flood discovery, answered with a responsive PING
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_ping_responded():
+    """A PING flood is answered with the node's own PING, same flood_id.
+
+    The PING must travel inside a PROPAGATE: hivemind-core reaches
+    handle_ping_message only from handle_propagate_message.
+    """
+    import uuid
+
+    b = single_satellite()
+    b.start_all()
+    try:
+        m = b.get_master("M0")
+        s = b.get_satellite("S0")
+        inner = HiveMessage(HiveMessageType.PING, {
+            "flood_id": uuid.uuid4().hex,
+            "peer": s.peer,
+            "site_id": s.identity.site_id,
+            "timestamp": 0,
+        })
+        s.send(HiveMessage(HiveMessageType.PROPAGATE, payload=inner))
+        assert_ping_responded(m, s)
+    finally:
+        b.stop_all()
+
+
+def test_bare_ping_is_not_routed():
+    """A PING sent without a PROPAGATE wrapper gets no response."""
     b = single_satellite()
     b.start_all()
     try:
         m = b.get_master("M0")
         s = b.get_satellite("S0")
         s.send(HiveMessage(HiveMessageType.PING, payload={}))
-        assert_ping_responded(m, s)
+        with pytest.raises(AssertionError, match="round-trip incomplete"):
+            assert_ping_responded(m, s, timeout=0.5)
     finally:
         b.stop_all()
 
