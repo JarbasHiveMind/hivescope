@@ -1,18 +1,12 @@
 # Changelog
 
-## Unreleased
+## [0.6.1a1](https://github.com/JarbasHiveMind/hivescope/tree/0.6.1a1) (2026-07-31)
 
-**Fixed (audit round 1):**
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.0a1...0.6.1a1)
 
-- `TopologyBuilder.add_relay()` returns the `RelayNode`; `add_satellite()` accepts a relay as upstream. The relay presets and the relay conformance tests now run (both are real checks again, no longer xfail).
-- `SatelliteNode.wait_for_handshake(timeout)` exists; the shipped satellite fixtures no longer call a phantom method and their credentials and ACLs apply to the connection.
-- `MessageRecorder.wait_for()` registers its waiter before the first lookup, so a message recorded in between no longer burns the timeout. New `snapshot()` gives assertion helpers a race-free copy of the records.
-- `InMemoryClientDatabase` is thread-safe, and `delete_client()` removes the entry, so a revoked key is refused.
-- `LoopbackNetworkProtocol` closes its listening socket on stop, reports the real startup exception at once, and warns when the server thread does not stop.
-- Temp directories created for node identities and for XDG isolation are removed.
-- `stop_all()` also shuts the agent protocol down and logs failures instead of swallowing them.
-- Assertion helpers that could not fail now fail: binary payload match, FIFO order without a sequence marker, broadcast noise filtering, deny-code correlation, and the `timeout` parameters of `assert_handshake_complete` and `assert_message_routed`.
-- `SatelliteNode.send()` raises before recording when disconnected; a decode error is logged and recorded; `start_all()` is idempotent; `natural_language_query()` takes a `timeout` and raises `TimeoutError` instead of faking a clean end-of-query.
+**Merged pull requests:**
+
+- fix: Han audit round 1 — concurrency, lifecycle, and assertion correctness [\#33](https://github.com/JarbasHiveMind/hivescope/pull/33) ([JarbasAl](https://github.com/JarbasAl))
 
 ## [0.6.0a1](https://github.com/JarbasHiveMind/hivescope/tree/0.6.0a1) (2026-07-16)
 
