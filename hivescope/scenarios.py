@@ -74,16 +74,16 @@ def three_satellites() -> TopologyBuilder:
     """
     T2 topology: 1 master, 3 satellites.
 
-    Pre-registered satellites S0, S1, S2 with test credentials.
+    Satellites S0, S1, S2, each with its own generated credentials.
 
     Perfect for testing broadcast, propagate, peer-to-peer routing.
     """
     b = TopologyBuilder()
     m = b.add_master("M0")
 
+    # Each satellite registers itself under its own generated access key when
+    # it connects; no pre-registration with fixed keys is needed.
     for i in range(3):
-        key = f"test-key-{i}"
-        m.register_satellite(key, password=f"test-password-{i}")
         b.add_satellite(f"S{i}", upstream=m)
 
     return b
@@ -104,13 +104,10 @@ def with_relay() -> TopologyBuilder:
     b = TopologyBuilder()
     m = b.add_master("M0")
 
-    # Register relay as a satellite under the master
-    m.register_satellite("relay-key", password="relay-password")
     r = b.add_relay("R0", upstream=m)
 
-    # Register satellites under the relay
-    r.register_satellite("sat-0-key", password="sat-0-password")
-    r.register_satellite("sat-1-key", password="sat-1-password")
+    # Satellites under the relay: credentials are generated per-satellite by
+    # SatelliteNode.connect(), so no pre-registration is needed here.
     b.add_satellite("S0", upstream=r)
     b.add_satellite("S1", upstream=r)
 
@@ -130,10 +127,8 @@ def chain_topology() -> TopologyBuilder:
     """
     b = TopologyBuilder()
     m = b.add_master("M0")
-    m.register_satellite("relay-key", password="relay-password")
     r = b.add_relay("R0", upstream=m)
 
-    r.register_satellite("sat-key", password="sat-password")
     b.add_satellite("S0", upstream=r)
 
     return b
@@ -152,8 +147,6 @@ def star_topology(num_satellites: int = 5) -> TopologyBuilder:
     m = b.add_master("M0")
 
     for i in range(num_satellites):
-        key = f"sat-{i}-key"
-        m.register_satellite(key, password=f"sat-{i}-password")
         b.add_satellite(f"S{i}", upstream=m)
 
     return b
@@ -233,16 +226,12 @@ def hierarchical_hubs(num_levels: int = 3, sats_per_relay: int = 2) -> TopologyB
     prev_node = m
     relays = []
     for level in range(1, num_levels):
-        relay_key = f"relay-{level}-key"
-        prev_node.register_satellite(relay_key, password=f"relay-{level}-password")
         r = b.add_relay(f"R{level}", upstream=prev_node)
         relays.append(r)
         prev_node = r
 
     # Add satellites at the last level
     for i in range(sats_per_relay):
-        sat_key = f"leaf-{i}-key"
-        prev_node.register_satellite(sat_key, password=f"leaf-{i}-password")
         b.add_satellite(f"S{i}", upstream=prev_node)
 
     return b
@@ -258,6 +247,5 @@ def with_multiple_agent_protocols() -> TopologyBuilder:
     """
     b = TopologyBuilder()
     m = b.add_master("M0")
-    m.register_satellite("test-key", password="test-password")
     b.add_satellite("S0", upstream=m)
     return b

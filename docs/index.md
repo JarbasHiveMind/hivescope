@@ -31,8 +31,8 @@ The entire simulation runtime lives in `hivescope/`: topology builder, node type
 | Method | Returns | Notes |
 |---|---|---|
 | `add_master(name, use_loopback=False, **kwargs)` | `MasterNode` | Creates and registers a master |
-| `add_satellite(name, upstream, **kwargs)` | `SatelliteNode` | Creates satellite under an upstream master |
-| `add_relay(name, upstream, **kwargs)` | `RelayNode` | Dual-role relay; upstream is a MasterNode |
+| `add_satellite(name, upstream, **kwargs)` | `SatelliteNode` | Creates satellite under an upstream master or relay |
+| `add_relay(name, upstream, **kwargs)` | `RelayNode` | Dual-role relay; upstream is a master or another relay |
 | `get_master(name)` | `MasterNode` | |
 | `get_satellite(name)` | `SatelliteNode` | |
 | `get_relay(name)` | `RelayNode` | |

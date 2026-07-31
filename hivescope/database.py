@@ -3,6 +3,7 @@ In-memory ClientDatabase that avoids any plugin loading or disk I/O.
 Implements the same public interface as hivemind_core.database.ClientDatabase
 so it can be passed directly to HiveMindListenerProtocol.
 """
+import threading
 from typing import List, Optional, Iterable
 
 from hivemind_plugin_manager.database import Client
@@ -13,6 +14,9 @@ class InMemoryClientDatabase:
 
     def __init__(self):
         self._clients: dict[str, Client] = {}  # keyed by api_key
+        # The loopback event loop reads this store from its own thread while
+        # the test thread writes it, so every access takes the lock.
+        self._lock = threading.RLock()
 
     # --- write API ---
 
@@ -31,6 +35,16 @@ class InMemoryClientDatabase:
                    can_broadcast: bool = True) -> bool:
         if crypto_key is not None:
             crypto_key = crypto_key[:16]
+        with self._lock:
+            return self._add_client_locked(
+                name, key, admin, intent_blacklist, skill_blacklist,
+                message_blacklist, allowed_types, crypto_key, password,
+                can_escalate, can_propagate, can_broadcast)
+
+    def _add_client_locked(self, name, key, admin, intent_blacklist,
+                           skill_blacklist, message_blacklist, allowed_types,
+                           crypto_key, password, can_escalate, can_propagate,
+                           can_broadcast) -> bool:
         existing = self.get_client_by_api_key(key)
         if existing:
             if name:
@@ -86,21 +100,23 @@ class InMemoryClientDatabase:
         return True
 
     def update_item(self, client: Client) -> bool:
-        self._clients[client.api_key] = client
+        with self._lock:
+            self._clients[client.api_key] = client
         return True
 
     def delete_client(self, key: str) -> bool:
-        if key in self._clients:
-            # mark revoked (don't reuse client_id)
-            c = self._clients[key]
-            self._clients[key] = Client(client_id=c.client_id, api_key="revoked")
-            return True
+        """Revoke a key: the entry is removed, so later lookups return None."""
+        with self._lock:
+            if key in self._clients:
+                del self._clients[key]
+                return True
         return False
 
     # --- read API ---
 
     def get_client_by_api_key(self, api_key: str) -> Optional[Client]:
-        return self._clients.get(api_key)
+        with self._lock:
+            return self._clients.get(api_key)
 
     def get_client_by_id(self, client_id: int) -> Optional[Client]:
         """Look a client up by its numeric ``client_id``.
@@ -113,7 +129,9 @@ class InMemoryClientDatabase:
         sends on a long-lived connection (e.g. a second utterance ~16 s
         after the first) is denied "user lookup failed".
         """
-        for c in self._clients.values():
+        with self._lock:
+            clients = list(self._clients.values())
+        for c in clients:
             if getattr(c, "client_id", None) == client_id:
                 return c
         return None
@@ -123,10 +141,12 @@ class InMemoryClientDatabase:
         return self.get_client_by_id(client_id)
 
     def get_clients_by_name(self, name: str) -> List[Client]:
-        return [c for c in self._clients.values() if c.name == name]
+        with self._lock:
+            return [c for c in self._clients.values() if c.name == name]
 
     def total_clients(self) -> int:
-        return len(self._clients)
+        with self._lock:
+            return len(self._clients)
 
     # --- lifecycle ---
 
@@ -140,7 +160,9 @@ class InMemoryClientDatabase:
         pass  # nothing to commit
 
     def __iter__(self) -> Iterable[Client]:
-        return iter(list(self._clients.values()))
+        with self._lock:
+            return iter(list(self._clients.values()))
 
     def __len__(self) -> int:
-        return len(self._clients)
+        with self._lock:
+            return len(self._clients)

@@ -169,19 +169,11 @@ class TestSourceStamping:
         finally:
             b.stop_all()
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="relay bind_upstream not in released hivemind-core; "
-               "passes once core relay wiring lands",
-    )
     def test_source_stamped_through_relay(self):
         """Source stamping survives a relay hop (chain_topology: M0→R0→S0)."""
         b = TopologyBuilder()
         m = b.add_master("M0")
-        m.register_satellite("relay-key", password="relay-password")
         r = b.add_relay("R0", upstream=m)
-        r.register_satellite("sat-key", password="sat-password",
-                              allowed_types=["recognizer_loop:utterance"])
         b.add_satellite("S0", upstream=r,
                         allowed_types=["recognizer_loop:utterance"])
         b.start_all()
@@ -376,19 +368,11 @@ class TestFifoOrdering:
         finally:
             b.stop_all()
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="relay bind_upstream not in released hivemind-core; "
-               "passes once core relay wiring lands",
-    )
     def test_fifo_through_relay(self):
         """Sequential utterances through a relay chain arrive in order at the root."""
         b = TopologyBuilder()
         m = b.add_master("M0")
-        m.register_satellite("relay-key", password="relay-password")
         r = b.add_relay("R0", upstream=m)
-        r.register_satellite("sat-key", password="sat-password",
-                              allowed_types=["recognizer_loop:utterance"])
         b.add_satellite("S0", upstream=r,
                         allowed_types=["recognizer_loop:utterance"])
         b.start_all()

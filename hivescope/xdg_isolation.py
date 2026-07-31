@@ -17,6 +17,7 @@ Opt out (e.g. a test that must read the real user config) with::
     HIVESCOPE_NO_XDG_ISOLATION=1 pytest ...
 """
 import os
+import shutil
 import tempfile
 
 _XDG_VARS = ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME")
@@ -31,3 +32,11 @@ def pytest_configure(config):
         os.makedirs(path, exist_ok=True)
         os.environ[var] = path
     config._hivescope_xdg_root = root
+
+
+def pytest_unconfigure(config):
+    """Remove the per-session XDG directory at the end of the run."""
+    root = getattr(config, "_hivescope_xdg_root", None)
+    if root:
+        shutil.rmtree(root, ignore_errors=True)
+        config._hivescope_xdg_root = None

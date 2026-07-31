@@ -5,6 +5,7 @@ InProcessHiveShim acts as the HiveMessageBusClient-compatible object that
 HiveMindSlaveProtocol requires, without any WebSocket involvement.
 """
 import json
+import logging
 import threading
 from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
@@ -29,7 +30,9 @@ from hivescope.plugins.agent import TestAgentProtocol
 from hivescope.plugins.binary import TestBinaryProtocol
 from hivescope.plugins.network import TestNetworkProtocol
 from hivescope.recorder import MessageRecorder, RecordedMessage
-from hivescope.utils import make_identity
+from hivescope.utils import make_identity, remove_identity_tmpdir
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +223,12 @@ class MasterNode:
     def connected_peers(self) -> List[str]:
         return list(self.hm_protocol.clients.keys())
 
+    # --- cleanup ---
+
+    def cleanup(self):
+        """Release the temp files this node's identity created."""
+        remove_identity_tmpdir(self.identity)
+
 
 # ---------------------------------------------------------------------------
 # SatelliteNode
@@ -328,10 +337,22 @@ class SatelliteNode:
                 "or that the master has handshake_enabled=True (RSA handshake)."
             )
 
+    def wait_for_handshake(self, timeout: float = 5.0) -> bool:
+        """Block until the handshake completes; return True if it did.
+
+        The handshake event lives on the shim, which the slave protocol sets
+        when crypto negotiation finishes.
+        """
+        return self.shim.handshake_event.wait(timeout=timeout)
+
     def disconnect(self):
         """Disconnect from the master."""
         if self._connection and self._master:
             self._master.hm_protocol.handle_client_disconnected(self._connection)
+
+    def cleanup(self):
+        """Release the temp files this node's identity created."""
+        remove_identity_tmpdir(self.identity)
 
     # --- sending ---
 
@@ -344,11 +365,13 @@ class SatelliteNode:
                                site_id=self.identity.site_id or "unknown")
                 message.context["session"] = sess.serialize()
             message = HiveMessage(HiveMessageType.BUS, payload=message)
-        self.recorder.record("out", message.msg_type, message._payload, "master")
+        # Guard BEFORE recording: a send that never happened must not appear
+        # in the recorder as an outbound message.
         if self._master is None or self._connection is None:
             raise RuntimeError(
                 f"Satellite {self.name!r} is not connected to any master."
             )
+        self.recorder.record("out", message.msg_type, message._payload, "master")
         self._master.hm_protocol.handle_message(message, self._connection)
 
     # --- receiving (called by master's send_msg) ---
@@ -365,9 +388,11 @@ class SatelliteNode:
         try:
             message = self._connection.decode(payload)
         except Exception as exc:
-            import traceback
-            print(f"[{self.name}] _receive_raw decode error: {exc}")
-            traceback.print_exc()
+            log.exception("[%s] _receive_raw decode error: %s", self.name, exc)
+            # Record the failure so a test waiting on a message fails fast with
+            # the decode error in the record list instead of on timeout.
+            self.recorder.record("in", "_decode_error", {"error": str(exc)},
+                                 self._connection.peer)
             return
 
         self.recorder.record("in", message.msg_type, message._payload,
