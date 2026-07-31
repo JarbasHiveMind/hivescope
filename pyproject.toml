@@ -44,6 +44,7 @@ ovos = [
 ]
 plot = [
     "matplotlib",
+    "networkx",
 ]
 
 [tool.pytest.ini_options]
