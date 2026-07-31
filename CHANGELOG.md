@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.5a1](https://github.com/JarbasHiveMind/hivescope/tree/0.6.5a1) (2026-07-31)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.4a1...0.6.5a1)
+
+**Merged pull requests:**
+
+- fix: plot\_hive\_mapper crashes on any populated hive \(NodeInfo has no rtt\_ms\) [\#46](https://github.com/JarbasHiveMind/hivescope/pull/46) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.6.4a1](https://github.com/JarbasHiveMind/hivescope/tree/0.6.4a1) (2026-07-31)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.3a1...0.6.4a1)
