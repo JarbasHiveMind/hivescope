@@ -42,6 +42,9 @@ ovos = [
     "ovoscope>=0.13",
     "ovos-core>=0.0.30",
 ]
+plot = [
+    "matplotlib",
+]
 
 [tool.pytest.ini_options]
 timeout = 30
