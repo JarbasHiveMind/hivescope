@@ -4,10 +4,10 @@
 
 > Pytest E2E testing library for HiveMind protocol implementations.
 
-Hivescope provides an **in-process simulator** for HiveMind network topologies. No real
-sockets, no running servers, no network processes needed. Tests wire `MasterNode`,
-`SatelliteNode`, and `RelayNode` objects together directly; every `HiveMessage` is
-recorded for inspection.
+Hivescope provides an in-process simulator for HiveMind network topologies. It needs no
+real sockets, no running servers, and no network processes. Tests wire `MasterNode`,
+`SatelliteNode`, and `RelayNode` objects together directly. The library records every
+`HiveMessage` for inspection.
 
 Used by [hivemind-core](https://github.com/JarbasHiveMind/HiveMind-core) e2e tests and
 by [hivemind-test-harness](https://github.com/JarbasHiveMind/hivemind-test-harness) for
@@ -82,7 +82,7 @@ def test_acl_denied(master_node, restricted_satellite):
 ### TopologyBuilder
 
 Assembles and lifecycle-manages a test topology. All `add_*` methods return the created
-node; `start_all()` / `stop_all()` start and stop all nodes in dependency order.
+node. `start_all()` and `stop_all()` start and stop all nodes in dependency order.
 
 ```python
 builder = TopologyBuilder()
@@ -102,7 +102,7 @@ builder.stop_all()
 | Function | Topology |
 |---|---|
 | `single_satellite()` | 1 master `M0`, 1 satellite `S0` |
-| `three_satellites()` | 1 master `M0`, satellites `S0`–`S2` |
+| `three_satellites()` | 1 master `M0`, satellites `S0` to `S2` |
 | `with_relay()` | master → relay → satellites |
 | `chain_topology()` | linear relay chain |
 | `star_topology(n=5)` | central master, N satellites |
@@ -160,11 +160,11 @@ Enable in `conftest.py`: `pytest_plugins = ['hivescope.pytest_fixtures']`
 | `test_template_routing.py` | Message routing through master |
 | `test_template_acl.py` | ACL enforcement: `allowed_types` denial and skill-blacklist injection |
 | `test_template_binary.py` | Binary protocol message handling |
-| `test_template_bridge1.py` | OVOS-BRIDGE-1 / SESSION-1 conformance — source stamping, destination routing, session fidelity, FIFO order |
-| `test_template_cascade.py` | CASCADE routing — pending core support, marked xfail |
-| `test_template_ping.py` | PING network-map round-trip — partially implemented, marked xfail |
-| `test_template_query.py` | QUERY routing — pending core support, marked xfail |
-| `test_template_rendezvous.py` | RENDEZVOUS handling — pending, marked xfail |
+| `test_template_bridge1.py` | OVOS-BRIDGE-1 / SESSION-1 conformance: source stamping, destination routing, session fidelity, FIFO order |
+| `test_template_cascade.py` | CASCADE routing, pending core support, marked xfail |
+| `test_template_ping.py` | PING network-map round-trip, partially implemented, marked xfail |
+| `test_template_query.py` | QUERY routing, pending core support, marked xfail |
+| `test_template_rendezvous.py` | RENDEZVOUS handling, pending, marked xfail |
 | `test_template_thirdparty.py` | THIRDPRTY (user-land) passthrough routing |
 
 See [docs/index.md](docs/index.md#templates) for tracking links on the pending items.
