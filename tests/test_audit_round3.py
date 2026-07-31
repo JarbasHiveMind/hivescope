@@ -140,3 +140,25 @@ def test_denied_records_accepts_a_real_ovos_msg_type():
 
     # No matching records; the point is that a real OVOS type does not raise.
     assert _denied_records(fake, "speak") == []
+
+
+def test_run_startup_failure_marks_broken_and_deregisters_floor(monkeypatch):
+    """A failed run() must not leave the instance looking 'already running':
+    the retry used to hit the _thread guard and silently no-op, hiding the
+    original startup error behind a later 'url not available' complaint."""
+    from hivescope.plugins import loopback as lb
+
+    proto = lb.LoopbackNetworkProtocol(hm_protocol=None)
+
+    async def _boom(self):
+        raise OSError("synthetic bind failure")
+
+    monkeypatch.setattr(lb.LoopbackNetworkProtocol, "_start_server", _boom)
+    with pytest.raises(RuntimeError, match="failed to start server"):
+        proto.run()
+
+    assert proto._broken is True
+    assert id(proto) not in lb._LIVE_FLOORS
+    # And the retry raises the clear build-a-new-instance error, not a no-op.
+    with pytest.raises(RuntimeError, match="broken"):
+        proto.run()
