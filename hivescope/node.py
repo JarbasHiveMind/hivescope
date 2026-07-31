@@ -129,8 +129,14 @@ class MasterNode:
                handshake_enabled: bool = True,
                agent_protocol: "TestAgentProtocol" = None,
                use_loopback: bool = False,
-               db: "Any" = None,
-               **kwargs) -> "MasterNode":
+               db: "Any" = None) -> "MasterNode":
+        """Build a master node.
+
+        There is deliberately no ``**kwargs`` catch-all: an unknown keyword
+        must raise ``TypeError`` instead of being silently discarded, because
+        a typo like ``requires_crypto=False`` would otherwise misconfigure the
+        node and the test would still pass.
+        """
         identity = make_identity(name)
         # Default to the in-memory store; callers may inject a real
         # ClientDatabase-compatible backend (e.g. a migrated sqlite/redis
@@ -150,12 +156,15 @@ class MasterNode:
         )
         # Use LoopbackNetworkProtocol (real WebSocket) if use_loopback=True,
         # otherwise use TestNetworkProtocol (in-process wiring)
+        recorder = MessageRecorder(name=name)
         if use_loopback:
             from hivescope.plugins.loopback import LoopbackNetworkProtocol
-            network = LoopbackNetworkProtocol(hm_protocol=hm_proto)
+            # The recorder is passed so undecodable frames land in the record
+            # list instead of only in the log.
+            network = LoopbackNetworkProtocol(hm_protocol=hm_proto,
+                                              recorder=recorder)
         else:
             network = TestNetworkProtocol(hm_protocol=hm_proto)
-        recorder = MessageRecorder(name=name)
         _instrument_master(hm_proto, recorder)
         return cls(name=name, identity=identity, db=db,
                    agent_protocol=agent, binary_protocol=binary,
@@ -270,7 +279,6 @@ class SatelliteNode:
         recorder = MessageRecorder(name=name)
 
         # shim acts as the HiveMessageBusClient for the slave protocol
-        sat_ref_holder = [None]  # forward reference trick
         shim = InProcessHiveShim(identity=identity, satellite_ref=None)
 
         slave = HiveMindSlaveProtocol(
@@ -430,7 +438,15 @@ class SatelliteNode:
             event.set()
 
         self.internal_bus.once(ovos_type, handler)
-        event.wait(timeout=timeout)
+        try:
+            event.wait(timeout=timeout)
+        finally:
+            # A `once` listener that never fired stays registered forever and
+            # would capture an unrelated later message.
+            try:
+                self.internal_bus.remove(ovos_type, handler)
+            except (ValueError, KeyError):
+                pass  # already fired and self-removed
         return result[0] if result else None
 
     @property

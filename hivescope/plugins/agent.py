@@ -35,19 +35,29 @@ class TestAgentProtocol(AgentProtocol):
     injected: List[Message] = field(default_factory=list)
 
     def __post_init__(self):
+        # shutdown() must be able to put the bus back exactly as it was, so
+        # keep both the original emit and our own wrapper. Two protocols can
+        # share one bus (e.g. a shared MiniCroft): each unwraps only its own
+        # layer, and only while its wrapper is still the installed one.
         _orig_emit = self.bus.emit
+        self._orig_emit = _orig_emit
 
         def _recording_emit(msg):
             if isinstance(msg, str):
                 try:
                     msg = Message.deserialize(msg)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Not a Message — it is still forwarded untouched, but a
+                    # silent pass hid malformed emissions from the test author.
+                    LOG.warning(
+                        "TestAgentProtocol: could not deserialize a bus "
+                        "emission, recording skipped: %s", exc)
             if isinstance(msg, Message):
                 self.injected.append(msg)
             _orig_emit(msg)
 
         self.bus.emit = _recording_emit
+        self._recording_emit = _recording_emit
 
         # Mirror OVOSProtocol.register_bus_handlers() — enables reverse routing
         # (OVOS bus messages → satellite) matching live deployment behaviour.
@@ -77,22 +87,32 @@ class TestAgentProtocol(AgentProtocol):
     # session keeps them from being reverse-routed to the satellite).
     # -----------------------------------------------------------------------
     def natural_language_query(self, utterance: str, lang: str,
-                               timeout: float = 2.0):
+                               timeout: float = 10.0,
+                               raise_on_timeout: bool = False):
         """Stream speak replies from the test bus, correlated by a fresh
         query-scoped session.
 
         Yields each answer chunk, then a final ``None`` end-of-query sentinel
         once ``ovos.utterance.handled`` arrives.
 
+        The default behaviour matches production
+        (``OVOSAgentProtocol.natural_language_query``): a timeout yields
+        ``None`` — the same sentinel as a clean empty answer — because the
+        ``AgentProtocol`` contract uses it to trigger escalation. Keeping that
+        shape is what makes escalation testable through this harness.
+
         Args:
-            utterance: The query text.
-            lang:      BCP-47 language tag.
-            timeout:   Seconds to wait for the next chunk.
+            utterance:        The query text.
+            lang:             BCP-47 language tag.
+            timeout:          Seconds to wait for the next chunk (production
+                              uses 10.0).
+            raise_on_timeout: Test-ergonomics opt-in. When ``True``, a timeout
+                              raises ``TimeoutError`` instead of yielding
+                              ``None``, so a stalled agent is distinguishable
+                              from an empty answer.
 
         Raises:
-            TimeoutError: No chunk and no end-of-query within *timeout*. A
-                stalled agent is a test failure, not a clean empty answer —
-                a clean empty answer yields ``None`` immediately.
+            TimeoutError: Only when *raise_on_timeout* is ``True``.
         """
         import queue
         import uuid
@@ -129,11 +149,16 @@ class TestAgentProtocol(AgentProtocol):
                 try:
                     chunk = q.get(timeout=timeout)
                 except queue.Empty:
-                    raise TimeoutError(
-                        f"TestAgentProtocol.natural_language_query: no reply "
-                        f"chunk and no 'ovos.utterance.handled' within "
-                        f"{timeout}s for utterance {utterance!r}"
-                    )
+                    if raise_on_timeout:
+                        raise TimeoutError(
+                            f"TestAgentProtocol.natural_language_query: no reply "
+                            f"chunk and no 'ovos.utterance.handled' within "
+                            f"{timeout}s for utterance {utterance!r}"
+                        )
+                    # Production contract: a stalled agent looks like an empty
+                    # answer so the caller can escalate.
+                    yield None
+                    return
                 if chunk is None:
                     yield None
                     return
@@ -145,7 +170,15 @@ class TestAgentProtocol(AgentProtocol):
     def handle_send(self, message: Message) -> None:
         """Route an explicit ``hive.send.downstream`` request.
 
-        Exact port of OVOSProtocol.handle_send() from ovos-bus-client/hpm.py.
+        Exact port of ``OVOSAgentProtocol.handle_send()`` from
+        hivemind-ovos-agent-plugin. The dispatch rules are, in order:
+
+        1. ``PROPAGATE`` / ``BROADCAST`` — fan out to every connected peer.
+        2. ``ESCALATE`` — ignored; only a slave may escalate.
+        3. anything else with a ``peer`` — sent to that peer alone. This
+           includes ``QUERY`` and ``CASCADE``: they are targeted here, not
+           dropped and not fanned out.
+        4. anything else without a ``peer`` — nothing to do.
         """
         payload = message.data.get("payload")
         peer = message.data.get("peer")
@@ -153,12 +186,12 @@ class TestAgentProtocol(AgentProtocol):
 
         hmessage = HiveMessage(msg_type, payload=payload, target_peers=[peer])
 
-        if msg_type in [HiveMessageType.PROPAGATE, HiveMessageType.BROADCAST,
-                        HiveMessageType.CASCADE]:
-            # Broadcast to all connected satellites
+        if msg_type in [HiveMessageType.PROPAGATE, HiveMessageType.BROADCAST]:
+            # Fan out to every connected satellite. CASCADE is deliberately
+            # NOT in this list: upstream fans out PROPAGATE/BROADCAST only.
             for p, client in self.clients.items():
                 client.send(hmessage)
-        elif msg_type in [HiveMessageType.ESCALATE, HiveMessageType.QUERY]:
+        elif msg_type == HiveMessageType.ESCALATE:
             # Only slaves can escalate; ignore silently when we are the master
             pass
         elif peer:
@@ -228,3 +261,34 @@ class TestAgentProtocol(AgentProtocol):
     def clear(self):
         """Reset all recorded messages."""
         self.injected.clear()
+
+    # -----------------------------------------------------------------------
+    # Lifecycle
+    # -----------------------------------------------------------------------
+
+    def shutdown(self) -> None:
+        """Undo everything :meth:`__post_init__` installed on the bus.
+
+        Removes the ``hive.send.downstream`` and ``message`` handlers and
+        restores the original ``bus.emit``. Without this, a bus that outlives
+        the protocol (a shared ``FakeBus`` or a MiniCroft) keeps routing
+        through a dead protocol and keeps growing ``injected``.
+
+        Safe to call twice, and safe when another protocol wrapped the same
+        bus afterwards — in that case the emit wrapper is left alone, because
+        removing a middle layer would break the outer one.
+        """
+        for event, handler in (("hive.send.downstream", self.handle_send),
+                               ("message", self.handle_internal_mycroft)):
+            try:
+                self.bus.remove(event, handler)
+            except Exception as exc:
+                LOG.warning("TestAgentProtocol.shutdown: removing %r handler "
+                            "failed: %s", event, exc)
+
+        wrapper = getattr(self, "_recording_emit", None)
+        orig = getattr(self, "_orig_emit", None)
+        if wrapper is not None and orig is not None and self.bus.emit is wrapper:
+            self.bus.emit = orig
+        self._recording_emit = None
+        self._orig_emit = None

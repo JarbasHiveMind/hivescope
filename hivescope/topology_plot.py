@@ -31,7 +31,7 @@ Requirements: ``matplotlib``, ``networkx``  (``uv pip install matplotlib network
 """
 
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend — safe for CI and test runners
@@ -144,12 +144,17 @@ def plot_topology_builder(
     path: str,
     title: str = "HiveMind Topology",
     layout: str = "spring",
+    relays: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Render the static wiring of a :class:`TopologyBuilder` to a PNG.
 
-    Relay nodes (``X_sat`` + ``X_master``) are merged into a single graph
-    node labelled ``X (relay)`` so the plot reflects the physical topology
-    — one device, not two disconnected halves.
+    A relay is one device with two protocol halves, so its ``X_sat`` and
+    ``X_master`` nodes are merged into a single graph node labelled
+    ``X (relay)``.
+
+    The pairs come from the builder's own ``_relays`` registry, not from
+    guessing at name suffixes. Two unrelated nodes that a caller happened to
+    name ``X_sat`` and ``X_master`` are therefore left alone.
 
     Node colours:
       * **blue** — root master (no upstream connection)
@@ -166,6 +171,9 @@ def plot_topology_builder(
         title:   Plot title shown at the top.
         layout:  NetworkX layout name: ``"spring"`` (default), ``"kamada_kawai"``,
                  ``"shell"``, ``"circular"``, ``"spectral"``.
+        relays:  Optional mapping of relay name → relay object, for a builder
+                 that does not expose ``_relays``. When omitted, the builder's
+                 registry is used.
 
     Returns:
         Absolute path to the written PNG file.
@@ -173,13 +181,19 @@ def plot_topology_builder(
     master_names: set = {m.name for m in builder.masters}
     sat_names: set    = {s.name for s in builder.satellites}
 
-    # Identify relay base names: any "X_sat" / "X_master" pair.
-    relay_bases: set = set()
-    for n in master_names | sat_names:
-        if n.endswith("_sat"):
-            base = n[:-4]
-            if f"{base}_master" in master_names:
-                relay_bases.add(base)
+    # Relay ground truth: the builder registers every dual-role node it made.
+    # Suffix parsing was a guess and merged unrelated nodes that happened to
+    # be called X_sat and X_master.
+    registry = relays if relays is not None else getattr(builder, "_relays", None)
+    if registry is None:
+        raise TypeError(
+            "plot_topology_builder: the builder exposes no '_relays' registry; "
+            "pass relays={name: relay} explicitly."
+        )
+    relay_bases: set = {
+        base for base in registry
+        if f"{base}_sat" in sat_names and f"{base}_master" in master_names
+    }
 
     # Build a mapping from raw names to canonical (merged) names.
     # R1_sat → R1, R1_master → R1, everything else stays as-is.

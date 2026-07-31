@@ -47,6 +47,21 @@ class LoopbackNetworkProtocol(NetworkProtocol):
     _clients: List[Any] = field(default_factory=list, init=False, repr=False)
     _ready: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     _startup_error: Optional[BaseException] = field(default=None, init=False, repr=False)
+    # Live connection handlers and their sockets, so stop() can let their
+    # finally blocks (handle_client_disconnected) run before the loop dies.
+    _sockets: Set[Any] = field(default_factory=set, init=False, repr=False)
+    _handler_tasks: Set[Any] = field(default_factory=set, init=False, repr=False)
+    _broken: bool = field(default=False, init=False, repr=False)
+    #: Recorder that gets a ``_decode_error`` entry when an inbound frame
+    #: cannot be decoded. Set by :meth:`MasterNode.create`.
+    recorder: Optional[Any] = field(default=None)
+    #: Seconds given to live client handlers to finish during stop().
+    shutdown_grace: float = field(default=2.0)
+    #: Wire-protocol floor written into the isolated server config before the
+    #: server starts. hivemind-core defaults to 2 (HIVEMIND-WIRE-1 §2), which
+    #: rejects the plain-JSON password-less clients this harness exists to
+    #: test (they top out at v1). Set higher in a test to exercise the floor.
+    min_protocol_version: int = field(default=1)
 
     @property
     def url(self) -> str:
@@ -71,9 +86,29 @@ class LoopbackNetworkProtocol(NetworkProtocol):
         Creates a real WebSocket server listening on localhost:0 (random port).
         The server runs on its own asyncio event loop in a background daemon thread.
         """
+        if self._broken:
+            raise RuntimeError(
+                "LoopbackNetworkProtocol is broken: a previous stop() could not "
+                "join the server thread, so the old event loop and its client "
+                "handlers are still alive. Build a new instance."
+            )
         if self._thread is not None:
             _LOG.warning("LoopbackNetworkProtocol.run() called but server already running")
             return
+
+        # Persist the harness protocol floor into the (session-isolated) XDG
+        # server config BEFORE handle_new_client() runs its version gate —
+        # without this, released hivemind-core (floor 2) silently rejects the
+        # raw JSON clients right after they connect and the peer never shows
+        # up in hm_protocol.clients.
+        try:
+            from hivemind_core.config import get_server_config
+            cfg = get_server_config()
+            if cfg.get("min_protocol_version") != self.min_protocol_version:
+                cfg["min_protocol_version"] = self.min_protocol_version
+                cfg.store()
+        except Exception as e:  # config module moved/absent — fail loudly later
+            _LOG.warning(f"could not set min_protocol_version in server config: {e}")
 
         self._ready.clear()
         self._startup_error = None
@@ -290,8 +325,13 @@ class LoopbackNetworkProtocol(NetworkProtocol):
             node_type=HiveMindNodeType.NODE,
         )
 
-        # Track this client
+        # Track this client, its socket and its handler task, so stop() can
+        # close it and let this coroutine's finally block run.
         self._clients.append(conn)
+        self._sockets.add(websocket)
+        handler_task = asyncio.current_task()
+        if handler_task is not None:
+            self._handler_tasks.add(handler_task)
 
         try:
             # Start the message sender task (reads from queue, sends to WebSocket)
@@ -307,6 +347,13 @@ class LoopbackNetworkProtocol(NetworkProtocol):
                     self.hm_protocol.handle_message(decoded, conn)
                 except Exception as e:
                     _LOG.warning(f"Failed to decode message from {name}: {e}")
+                    # Mirror SatelliteNode._receive_raw: surface the cause in
+                    # the recorder so a wait_for() fails with the decode error
+                    # instead of burning its whole timeout.
+                    if self.recorder is not None:
+                        self.recorder.record("in", "_decode_error",
+                                             {"error": str(e), "client": name},
+                                             conn.peer)
 
             _LOG.info(f"Client {name} disconnected (WebSocket closed)")
 
@@ -330,12 +377,52 @@ class LoopbackNetworkProtocol(NetworkProtocol):
                 self._clients.remove(conn)
             except ValueError:
                 pass  # Already removed or not in list
+            self._sockets.discard(websocket)
+            if handler_task is not None:
+                self._handler_tasks.discard(handler_task)
+
+    async def _drain_clients(self):
+        """Close every live client socket and wait for its handler to finish.
+
+        Runs ON the server loop. Each handler's finally block calls
+        ``handle_client_disconnected``, which is what removes the peer from
+        ``hm_protocol.clients``. Stopping the loop first would skip all of
+        that and leave ghost peers behind.
+        """
+        for websocket in list(self._sockets):
+            try:
+                await websocket.close()
+            except Exception as exc:
+                _LOG.warning(f"LoopbackNetworkProtocol: closing client socket failed: {exc}")
+        tasks = [t for t in self._handler_tasks if not t.done()]
+        if tasks:
+            done, pending = await asyncio.wait(tasks, timeout=self.shutdown_grace)
+            for task in pending:
+                _LOG.warning(
+                    "LoopbackNetworkProtocol: client handler did not finish in "
+                    f"{self.shutdown_grace}s; cancelling it"
+                )
+                task.cancel()
 
     def stop(self):
-        """Stop the WebSocket server and wait for thread to finish."""
-        if self._loop is not None and not self._loop.is_closed():
-            # Stop the event loop
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        """Stop the WebSocket server and wait for the thread to finish.
+
+        Live client handlers are given a bounded window to run their cleanup
+        before the loop stops. If the thread cannot be joined, the instance is
+        marked broken and :meth:`run` refuses to reuse it.
+        """
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            try:
+                future = asyncio.run_coroutine_threadsafe(self._drain_clients(), loop)
+                future.result(timeout=self.shutdown_grace + 3)
+            except Exception as exc:
+                _LOG.warning(f"LoopbackNetworkProtocol: draining clients failed: {exc}")
+            # Only now take the loop down.
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass  # loop already closed by its own thread
 
         if self._thread is not None:
             # Wait for thread to finish (give it time to clean up)
@@ -343,10 +430,17 @@ class LoopbackNetworkProtocol(NetworkProtocol):
             if self._thread.is_alive():
                 _LOG.warning(
                     "LoopbackNetworkProtocol: server thread still alive after 5s; "
-                    "the event loop or a client handler did not stop"
+                    "the event loop or a client handler did not stop. Marking "
+                    "this protocol broken — it cannot be run() again."
                 )
-            self._thread = None
+                # Keep the thread reference: dropping it would hide a live
+                # thread and let run() start a second server on top of it.
+                self._broken = True
+            else:
+                self._thread = None
 
         self._url = None
         self._ready.clear()
         self._clients.clear()
+        self._sockets.clear()
+        self._handler_tasks.clear()

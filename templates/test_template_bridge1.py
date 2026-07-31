@@ -278,15 +278,19 @@ def test_blacklisted_skills_injected():
         allowed_types=["recognizer_loop:utterance"],
         skill_blacklist=["skill-weather"],
     )
+    # Wire the chain BEFORE start_all: the policies need the protocol they
+    # guard, and a chain installed after the handshake misses earlier traffic.
+    m_node.hm_protocol.policy_chain = PolicyChain(
+        policies=[
+            MessageTypeACLPolicy(hm_protocol=m_node.hm_protocol),
+            OVOSAgentPolicy(hm_protocol=m_node.hm_protocol),
+        ],
+        _optional=[False, False],
+    )
     b.start_all()
     try:
         m = b.get_master("M0")
         s = b.get_satellite("S0")
-
-        m.hm_protocol.policy_chain = PolicyChain([
-            MessageTypeACLPolicy(),
-            OVOSAgentPolicy(),
-        ])
 
         s.send(Message("recognizer_loop:utterance", {"utterances": ["weather"]}))
         time.sleep(0.3)

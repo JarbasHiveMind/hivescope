@@ -162,7 +162,7 @@ Enable in `conftest.py`: `pytest_plugins = ['hivescope.pytest_fixtures']`
 | `test_template_binary.py` | Binary protocol message handling |
 | `test_template_bridge1.py` | OVOS-BRIDGE-1 / SESSION-1 conformance: source stamping, destination routing, session fidelity, FIFO order |
 | `test_template_cascade.py` | CASCADE routing, pending core support, marked xfail |
-| `test_template_ping.py` | PING network-map round-trip, partially implemented, marked xfail |
+| `test_template_ping.py` | PING network-map round-trip: send `PROPAGATE(PING)`, assert the responsive PING |
 | `test_template_query.py` | QUERY routing, pending core support, marked xfail |
 | `test_template_rendezvous.py` | RENDEZVOUS handling, pending, marked xfail |
 | `test_template_thirdparty.py` | THIRDPRTY (user-land) passthrough routing |

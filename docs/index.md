@@ -138,7 +138,7 @@ Implements the HiveMind client database interface backed by a plain dict. `Maste
 | `assert_binary_delivered(master, expected_payload=None, count=1)` | Asserts master received `count` BINARY messages. If `expected_payload` is given, also checks it was delivered |
 | `assert_query_routed(master, count=1)` | PENDING: QUERY routing not yet in hivemind-core ([core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88)). Use with `@pytest.mark.xfail(strict=False)` |
 | `assert_cascade_routed(*nodes, count=1)` | PENDING: CASCADE routing not yet in hivemind-core (core#74 / ws#88), xfail |
-| `assert_ping_responded(master, satellite)` | PENDING (partial): PING network-map round-trip not fully implemented (core#74), xfail |
+| `assert_ping_responded(master, satellite)` | PING round-trip. There is no PONG: the answer is the node's own PING inside a PROPAGATE. Send `PROPAGATE(PING)`; a bare PING is dropped by core |
 | `assert_rendezvous_handled(master, count=1)` | PENDING: RENDEZVOUS not yet implemented ([ws#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103)), xfail |
 | `assert_thirdparty_passed(node, count=1, direction=None)` | Asserts `count` THIRDPRTY (user-land passthrough) messages at `node`. Verify routing status against `LIBRARY.md` before relying on this |
 
@@ -204,7 +204,7 @@ All functions return a fully wired (not yet started) `TopologyBuilder`.
 | `test_template_binary.py` | Binary protocol message handling |
 | `test_template_bridge1.py` | OVOS-BRIDGE-1 / SESSION-1 / SESSION-2 conformance: source stamping, destination routing, session fidelity, FIFO order |
 | `test_template_cascade.py` | CASCADE routing, pending core support ([core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88)), marked xfail |
-| `test_template_ping.py` | PING network-map round-trip, partially implemented (core#74), marked xfail |
+| `test_template_ping.py` | PING network-map round-trip: send `PROPAGATE(PING)` and assert the responsive PING |
 | `test_template_query.py` | QUERY routing, pending core support (core#74 / ws#88), marked xfail |
 | `test_template_rendezvous.py` | RENDEZVOUS handling, pending ([ws#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103)), marked xfail |
 | `test_template_thirdparty.py` | THIRDPRTY (user-land) passthrough routing |

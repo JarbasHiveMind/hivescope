@@ -14,6 +14,12 @@ class InMemoryClientDatabase:
 
     def __init__(self):
         self._clients: dict[str, Client] = {}  # keyed by api_key
+        # Monotonic client_id source. It must NOT be derived from the size of
+        # the dict: delete_client() really removes rows, so `len + 1` reuses a
+        # live id after a delete-then-add and makes get_client_by_id ambiguous
+        # (the TTL cache refresh on the admission hot path then resolves the
+        # wrong client).
+        self._next_id: int = 0
         # The loopback event loop reads this store from its own thread while
         # the test thread writes it, so every access takes the lock.
         self._lock = threading.RLock()
@@ -33,6 +39,17 @@ class InMemoryClientDatabase:
                    can_escalate: bool = True,
                    can_propagate: bool = True,
                    can_broadcast: bool = True) -> bool:
+        """Add a client, or update the client that already holds ``key``.
+
+        Field semantics on update (they match hivemind-core's ClientDatabase):
+
+        - ``crypto_key`` is truncated to the first 16 characters, because the
+          wire cipher uses a 16-byte key.
+        - An empty ``crypto_key`` or ``password`` is IGNORED, not cleared. Use
+          :meth:`update_item` with an explicit ``Client`` to clear either field.
+        - ``allowed_types`` is overwritten whenever it is not ``None``, so
+          passing ``[]`` really does revoke a previous whitelist.
+        """
         if crypto_key is not None:
             crypto_key = crypto_key[:16]
         with self._lock:
@@ -83,10 +100,11 @@ class InMemoryClientDatabase:
         if intent_blacklist:
             metadata["intent_blacklist"] = list(intent_blacklist)
 
+        self._next_id += 1
         client = Client(
             api_key=key,
             name=name,
-            client_id=self.total_clients() + 1,
+            client_id=self._next_id,
             is_admin=admin,
             allowed_types=allowed_types or [],
             crypto_key=crypto_key,

@@ -17,12 +17,12 @@ Ready (core routing implemented):
   ESCALATE   — assert_escalate_delivered
   INTERCOM   — assert_intercom_delivered
   BINARY     — assert_binary_delivered
+  PING       — assert_ping_responded
   ACL (all)  — assert_acl_enforced
 
 Pending (core routing not yet implemented; helpers scaffold the check):
   QUERY      — assert_query_routed        (xfail: core#74 / ws#88)
   CASCADE    — assert_cascade_routed      (xfail: core#74 / ws#88)
-  PING       — assert_ping_responded      (xfail: core#74)
   RENDEZVOUS — assert_rendezvous_handled  (xfail: ws#103)
   THIRDPRTY  — assert_thirdparty_passed   (verify status)
 
@@ -48,6 +48,15 @@ SESSION_ID_DEFAULT_FORBIDDEN = "session_id_default_forbidden"
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+def recorder_mark() -> float:
+    """Return a timestamp mark comparable with ``RecordedMessage.timestamp``.
+
+    Take one just before a probe emission and pass it as ``since=`` to an
+    assertion helper, so only traffic caused by that probe is examined.
+    """
+    return time.monotonic()
+
 
 def _find(recorder, msg_type_value: str, direction: Optional[str] = None):
     return [
@@ -75,28 +84,42 @@ def _is_policy_denied(record) -> bool:
     return _inner_payload(record).get("type") == "hive.policy.denied"
 
 
-def _denied_records(satellite, msg_type: Optional[str] = None):
+def _denied_records(satellite, msg_type: Optional[str] = None,
+                    strict: bool = True):
     """Return ``hive.policy.denied`` records received by *satellite*.
 
-    When *msg_type* is given, only denials that name that message type are
-    returned — a denial carries the offending type in ``data["msg_type"]``
-    (or ``data["type"]``) when the policy reports it. Denials that carry no
-    type at all are kept, because the policy is not required to echo it.
+    When *msg_type* is given, a denial matches only if it echoes that type.
+    hivemind-core echoes it in ``data["denied_type"]``
+    (``HiveMindListenerProtocol._send_policy_denied``); ``data["msg_type"]``
+    and ``data["type"]`` are accepted as well for other policy backends.
+
+    Denials that carry no type at all are ambiguous: they could belong to any
+    message the satellite sent. ``strict=True`` (the default) drops them, so a
+    typed assertion can never pass on unrelated traffic. ``strict=False``
+    keeps them, but only when no typed denial matched — that way a correct
+    typed denial is always preferred over an untyped guess.
     """
-    out = []
+    typed = []
+    untyped = []
     for r in satellite.recorder.snapshot():
         if r.direction != "in" or r.msg_type != HiveMessageType.BUS.value:
             continue
         payload = _inner_payload(r)
         if payload.get("type") != "hive.policy.denied":
             continue
-        if msg_type is not None:
-            data = payload.get("data") or {}
-            reported = data.get("msg_type") or data.get("type")
-            if reported is not None and reported != msg_type:
-                continue
-        out.append((r, payload))
-    return out
+        if msg_type is None:
+            typed.append((r, payload))
+            continue
+        data = payload.get("data") or {}
+        reported = (data.get("denied_type") or data.get("msg_type")
+                    or data.get("type"))
+        if reported is None:
+            untyped.append((r, payload))
+        elif reported == msg_type:
+            typed.append((r, payload))
+    if typed or msg_type is None or strict:
+        return typed
+    return untyped
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -395,6 +418,7 @@ def assert_acl_enforced(
     satellite: SatelliteNode,
     msg_type: str,
     allowed: bool = False,
+    strict: bool = True,
 ) -> None:
     """Assert policy-admission enforcement for *msg_type* on *satellite*.
 
@@ -403,8 +427,10 @@ def assert_acl_enforced(
     the message) and that no ``bus_inject`` record for *msg_type* appears at
     master (the message was never forwarded to the OVOS bus).
 
-    When ``allowed=True``: verifies the message WAS recorded at master's
-    ``bus_inject`` level (the injection hook was reached).
+    When ``allowed=True``: verifies BOTH that no denial for *msg_type* came
+    back AND that the message WAS recorded at master's ``bus_inject`` level
+    for this satellite's peer.  "No denial" alone is not evidence of delivery
+    — a message that was silently dropped also produces no denial.
 
     For the policy model (``MessageTypeACLPolicy`` + ``OVOSAgentPolicy``):
 
@@ -425,7 +451,8 @@ def assert_acl_enforced(
     # A policy-denied message causes the master to send hive.policy.denied
     # back to the satellite (recorded as inbound at the satellite). Only
     # denials that concern *msg_type* count.
-    denied_responses = [r for r, _ in _denied_records(satellite, msg_type)]
+    denied_responses = [r for r, _ in _denied_records(satellite, msg_type,
+                                                      strict=strict)]
 
     if allowed:
         if denied_responses:
@@ -433,6 +460,19 @@ def assert_acl_enforced(
                 f"ACL: expected '{msg_type}' to be allowed, but satellite received "
                 f"{len(denied_responses)} hive.policy.denied response(s).\n"
                 f"Denied responses: {denied_responses}"
+            )
+        peer = satellite.peer
+        injected = [
+            r for r in master.recorder.snapshot()
+            if r.direction == "bus_inject" and r.msg_type == msg_type
+            and (peer is None or r.peer == peer)
+        ]
+        if not injected:
+            raise AssertionError(
+                f"ACL: expected '{msg_type}' to be allowed, but master recorded "
+                f"no bus_inject for it (peer={peer!r}) — the message was never "
+                f"delivered to the agent bus.\n"
+                f"All master records: {master.recorder.snapshot()}"
             )
     else:
         if not denied_responses:
@@ -448,6 +488,7 @@ def assert_policy_denied(
     satellite: SatelliteNode,
     msg_type: str,
     deny_code: Optional[str] = None,
+    strict: bool = True,
 ) -> None:
     """Assert that *msg_type* sent by *satellite* was denied by the policy chain.
 
@@ -459,11 +500,15 @@ def assert_policy_denied(
         master:     The master node (unused in the check, kept for signature
                     parity with other helpers).
         satellite:  The satellite that sent the message.
-        msg_type:   The OVOS message type that should have been denied
-                    (used only for the error message; not matched in the
-                    payload since deny responses don't echo the type).
+        msg_type:   The OVOS message type that should have been denied. The
+                    denial must echo it in ``data["denied_type"]``.
         deny_code:  Optional stable deny code to verify.  If ``None``, any
-                    ``hive.policy.denied`` response satisfies the assertion.
+                    matching ``hive.policy.denied`` response satisfies the
+                    assertion.
+        strict:     ``True`` (default) requires the denial to echo *msg_type*.
+                    Set ``False`` to also accept a denial that names no type —
+                    such a denial cannot be correlated with *msg_type*, so the
+                    assertion then proves only "something was denied".
     """
     # The satellite should have received a HiveMessage whose inner BUS payload
     # has msg_type "hive.policy.denied".  The recorder stores the raw payload
@@ -473,9 +518,9 @@ def assert_policy_denied(
         if r.direction == "in" and r.msg_type == HiveMessageType.BUS.value
     ]
 
-    # Correlate the denial with the message type under test where the payload
-    # reports it; denials without a type are accepted.
-    denied_responses = _denied_records(satellite, msg_type)
+    # Correlate the denial with the message type under test via the echoed
+    # denied_type; see _denied_records for the strict/loose rule.
+    denied_responses = _denied_records(satellite, msg_type, strict=strict)
 
     if not denied_responses:
         raise AssertionError(
@@ -719,21 +764,60 @@ def assert_cascade_routed(
 def assert_ping_responded(
     master: MasterNode,
     satellite: SatelliteNode,
+    timeout: float = 2.0,
 ) -> None:
-    """Assert that a PING from *satellite* produced a response at master.
+    """Assert that a PING from *satellite* produced a responsive PING back.
 
-    .. note::
-        PENDING (partial) — PING network-map routing is not fully implemented.
-        Track: `hivemind-core#74 <https://github.com/JarbasHiveMind/HiveMind-core/pull/74>`_.
-        Tests using this helper should be marked ``@pytest.mark.xfail(strict=False)``.
+    There is no ``PONG`` message type in HiveMind. A node answers a PING flood
+    by sending **its own** PING (same ``flood_id``) wrapped in a ``PROPAGATE``
+    to every peer — see ``HiveMindListenerProtocol.handle_ping_message``. So
+    the response this helper looks for is an inbound ``PROPAGATE`` (or bare
+    ``PING``) record at the satellite.
+
+    Checks, in order:
+
+    1. the satellite sent a PING (bare, or wrapped in a PROPAGATE),
+    2. the master recorded it inbound,
+    3. the satellite recorded the master's responsive PING inbound.
+
+    A bare ``PING`` is *not* routed by hivemind-core: only the inner PING of a
+    ``PROPAGATE`` reaches ``handle_ping_message``. Send
+    ``HiveMessage(PROPAGATE, payload=HiveMessage(PING, {"flood_id": ...}))``.
+
+    Args:
+        master:    The master node.
+        satellite: The satellite that sent the PING.
+        timeout:   Seconds to wait for the responsive PING at the satellite.
     """
-    ping_out = _find(satellite.recorder, HiveMessageType.PING.value, direction="out")
-    ping_in = _find(master.recorder, HiveMessageType.PING.value, direction="in")
+    ping_types = (HiveMessageType.PING.value, HiveMessageType.PROPAGATE.value)
+
+    ping_out = [r for r in satellite.recorder.snapshot()
+                if r.direction == "out" and r.msg_type in ping_types]
+    ping_in = [r for r in master.recorder.snapshot()
+               if r.direction == "in" and r.msg_type in ping_types]
     if not ping_out or not ping_in:
         raise AssertionError(
-            f"[PENDING] PING round-trip incomplete (core#74). "
-            f"satellite sent {len(ping_out)}, master received {len(ping_in)}."
+            f"PING was not delivered: satellite sent {len(ping_out)} "
+            f"PING/PROPAGATE record(s), master received {len(ping_in)}.\n"
+            f"Satellite records: {satellite.recorder.snapshot()}"
         )
+
+    deadline = time.monotonic() + timeout
+    while True:
+        response = [r for r in satellite.recorder.snapshot()
+                    if r.direction == "in" and r.msg_type in ping_types]
+        if response:
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
+
+    raise AssertionError(
+        f"PING round-trip incomplete: the satellite never received a "
+        f"responsive PING (an inbound PROPAGATE carrying a PING) within "
+        f"{timeout}s. A bare PING is dropped by hivemind-core — wrap it in a "
+        f"PROPAGATE.\nSatellite records: {satellite.recorder.snapshot()}"
+    )
 
 
 def assert_rendezvous_handled(
@@ -918,6 +1002,8 @@ def assert_destination_routed(
     other_satellites: List[SatelliteNode],
     msg_type: str,
     timeout: float = 2.0,
+    settle: float = 0.2,
+    since: Optional[float] = None,
 ) -> None:
     """Assert an outbound message reaches only *target_satellite* and not others.
 
@@ -942,6 +1028,14 @@ def assert_destination_routed(
         msg_type:          HiveMessage type value to look for at the satellites
                            (typically ``HiveMessageType.BUS.value``).
         timeout:           Seconds to wait for the target to receive the message.
+        settle:            Seconds to wait after the target receipt so a delayed
+                           misroute can still surface.
+        since:             Only traffic recorded at or after this
+                           ``time.monotonic()`` mark counts as cross-talk. Pass
+                           :func:`recorder_mark` taken just before the emit for
+                           an exact window. When omitted, the window opens
+                           ``settle`` seconds before the target's own receipt,
+                           so earlier history never counts.
     """
     # Wait for target
     recv = target_satellite.recorder.wait_for(msg_type, direction="in", timeout=timeout)
@@ -954,12 +1048,20 @@ def assert_destination_routed(
 
     # A delayed misroute can land just after the target receipt; give it a
     # moment to surface before declaring no cross-talk (BRIDGE-1 §3.2).
-    time.sleep(0.2)
+    if settle > 0:
+        time.sleep(settle)
+
+    # Only traffic from this probe counts. Counting the whole history made the
+    # check fail on any earlier unrelated delivery — and pass for the wrong
+    # reason when the probe itself never arrived anywhere.
+    window_start = since if since is not None else (recv.timestamp - max(settle, 0.0))
+
     errors: List[str] = []
     for other in other_satellites:
         matches = [
             r for r in other.recorder.snapshot()
             if r.direction == "in" and r.msg_type == msg_type
+            and r.timestamp >= window_start
         ]
         if matches:
             errors.append(

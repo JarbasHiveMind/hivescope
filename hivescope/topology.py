@@ -110,10 +110,16 @@ class TopologyBuilder:
             use_loopback: If True, use LoopbackNetworkProtocol (real WebSocket server on
                          localhost:0). If False (default), use TestNetworkProtocol (in-process
                          wiring). Set to True for testing real clients (MicroPython, JS, etc.).
-            **kwargs: Forwarded to MasterNode.create() (require_crypto, handshake_enabled, etc.).
+            **kwargs: Forwarded to :meth:`MasterNode.create` — ``require_crypto``,
+                     ``handshake_enabled``, ``agent_protocol``, ``db``. Any other
+                     keyword raises ``TypeError`` there, so a misspelled option
+                     fails loudly instead of silently misconfiguring the node.
 
         Returns:
             MasterNode. Access loopback URL via master.network_protocol.url after start_all().
+
+        Raises:
+            TypeError: An unknown keyword was passed.
         """
         node = MasterNode.create(name, use_loopback=use_loopback, **kwargs)
         self._masters[name] = node

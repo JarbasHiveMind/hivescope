@@ -60,7 +60,9 @@ def topology() -> TopologyBuilder:
     """
     builder = TopologyBuilder()
     yield builder
-    # Auto-stop on teardown
+    # The topology fixture is the single owner of teardown: every other
+    # fixture here builds on it, so a stop_all() in each of them ran the
+    # teardown two or three times per test.
     try:
         builder.stop_all()
     except Exception as exc:
@@ -72,7 +74,8 @@ def master_node(topology: TopologyBuilder) -> MasterNode:
     """
     A pre-configured master node in a simple single-master topology.
 
-    Automatically started and stopped.
+    Started automatically. Teardown belongs to the ``topology`` fixture this
+    one depends on, so it is not repeated here.
 
     Use to test satellite interactions:
 
@@ -84,11 +87,6 @@ def master_node(topology: TopologyBuilder) -> MasterNode:
     m = topology.add_master("M0")
     topology.start_all()
     yield m
-    # Auto-stop on teardown
-    try:
-        topology.stop_all()
-    except Exception as exc:
-        log.warning("master_node fixture teardown failed: %s", exc)
 
 
 @pytest.fixture(scope="function")
@@ -115,12 +113,6 @@ def satellite_node(
 
     yield s
 
-    # Auto-stop on teardown
-    try:
-        topology.stop_all()
-    except Exception as exc:
-        log.warning("satellite_node fixture teardown failed: %s", exc)
-
 
 @pytest.fixture(scope="function")
 def admin_satellite(
@@ -143,11 +135,6 @@ def admin_satellite(
     assert s.wait_for_handshake(timeout=10), "admin_satellite handshake timed out"
 
     yield s
-
-    try:
-        topology.stop_all()
-    except Exception as exc:
-        log.warning("admin_satellite fixture teardown failed: %s", exc)
 
 
 @pytest.fixture(scope="function")
@@ -173,7 +160,3 @@ def restricted_satellite(
 
     yield s
 
-    try:
-        topology.stop_all()
-    except Exception as exc:
-        log.warning("restricted_satellite fixture teardown failed: %s", exc)

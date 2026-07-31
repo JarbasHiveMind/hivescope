@@ -58,21 +58,75 @@ def test_add_satellite_rejects_bad_upstream():
         b.add_satellite("S0", upstream="M0")
 
 
-@pytest.mark.parametrize("builder", [
-    scenarios.single_satellite,
-    scenarios.admin_satellite,
-    scenarios.three_satellites,
-    scenarios.with_relay,
-    scenarios.chain_topology,
-    scenarios.star_topology,
-    scenarios.with_acl_enforcement,
-    scenarios.hierarchical_hubs,
-    scenarios.with_multiple_agent_protocols,
-])
-def test_scenario_presets_construct(builder):
-    """Every preset builds without AttributeError and yields a TopologyBuilder."""
-    b = builder()
+# name → (master count, satellite count, relay count)
+_PRESET_SHAPES = {
+    "single_satellite":            (1, 1, 0),
+    "admin_satellite":             (1, 1, 0),
+    "three_satellites":            (1, 3, 0),
+    "with_relay":                  (2, 3, 1),   # M0 + R0_master; R0_sat + S0 + S1
+    "chain_topology":              (2, 2, 1),
+    "star_topology":               (1, 5, 0),
+    "with_acl_enforcement":        (1, 3, 0),
+    "hierarchical_hubs":           (3, 4, 2),   # M0 + R1 + R2; 2 relay sats + 2 leaves
+    "with_multiple_agent_protocols": (1, 1, 0),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_PRESET_SHAPES))
+def test_scenario_presets_construct(name):
+    """Every preset builds the topology its docstring describes.
+
+    `isinstance(b, TopologyBuilder)` alone passed for an empty builder, so it
+    could not catch a preset that silently stopped wiring its nodes.
+    """
+    b = getattr(scenarios, name)()
     assert isinstance(b, TopologyBuilder)
+
+    n_masters, n_sats, n_relays = _PRESET_SHAPES[name]
+    assert len(b.masters) == n_masters, [m.name for m in b.masters]
+    assert len(b.satellites) == n_sats, [s.name for s in b.satellites]
+    assert len(b.relays) == n_relays, [r.name for r in b.relays]
+
+    # Every satellite is wired to a master that exists in this builder.
+    master_names = {m.name for m in b.masters}
+    for sat_name, master_name, _ in b._connections:
+        assert master_name in master_names
+    assert {c[0] for c in b._connections} == {s.name for s in b.satellites}
+
+    # Each relay owns one satellite half and one master half, sharing a bus.
+    for relay in b.relays:
+        assert relay.upstream.name == f"{relay.name}_sat"
+        assert relay.listener.name == f"{relay.name}_master"
+        assert relay.listener.agent_protocol.bus is relay.bus
+
+
+def test_acl_preset_registers_the_documented_permissions():
+    """with_acl_enforcement() promises three specific ACL profiles."""
+    b = scenarios.with_acl_enforcement()
+    b.start_all()
+    try:
+        m = b.get_master("M0")
+        by_name = {}
+        for sat_name, _, kwargs in b._connections:
+            by_name[sat_name] = kwargs
+
+        assert by_name["S_ADMIN"]["is_admin"] is True
+        assert by_name["S_ADMIN"]["allowed_types"] == [
+            "recognizer_loop:utterance", "speak"]
+        assert by_name["S_RESTRICTED_TYPE"]["allowed_types"] == ["speak"]
+        assert by_name["S_RESTRICTED_SKILL"]["skill_blacklist"] == ["skill-weather"]
+
+        # And the profiles really landed in the master DB.
+        for name in ("S_ADMIN", "S_RESTRICTED_TYPE", "S_RESTRICTED_SKILL"):
+            sat = b.get_satellite(name)
+            row = m.db.get_client_by_api_key(sat.identity.access_key)
+            assert row is not None, f"{name} was never registered"
+            assert row.allowed_types == by_name[name]["allowed_types"]
+        skill_row = m.db.get_client_by_api_key(
+            b.get_satellite("S_RESTRICTED_SKILL").identity.access_key)
+        assert skill_row.metadata["skill_blacklist"] == ["skill-weather"]
+    finally:
+        b.stop_all()
 
 
 def test_with_multiple_agent_protocols_accepts_override():
@@ -397,8 +451,11 @@ def test_start_all_is_idempotent():
 
 
 def test_natural_language_query_raises_on_timeout():
+    """Opt-in strict mode. The default now mirrors production and yields the
+    None escalation sentinel — see test_audit_round2."""
     agent = _TestAgentProtocol()
-    gen = agent.natural_language_query("hello", "en-US", timeout=0.2)
+    gen = agent.natural_language_query("hello", "en-US", timeout=0.2,
+                                       raise_on_timeout=True)
     with pytest.raises(TimeoutError):
         next(gen)
 
