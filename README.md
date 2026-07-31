@@ -71,8 +71,14 @@ def test_message_forwarded(master_node, satellite_node):
 ```python
 def test_acl_denied(master_node, restricted_satellite):
     from ovos_bus_client.message import Message
+    from hivescope.assertions import assert_policy_denied
+
     restricted_satellite.send(Message("admin:command", {}))
-    master_node.recorder.assert_not_received("bus")
+    # master_node.recorder logs every inbound message BEFORE policy runs, so
+    # it always has a record — checking it cannot prove the message was
+    # denied. Assert the actual denial signal instead: the satellite must
+    # receive a hive.policy.denied response for this message type.
+    assert_policy_denied(master_node, restricted_satellite, "admin:command")
 ```
 
 ---

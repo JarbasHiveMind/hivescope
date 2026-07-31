@@ -84,9 +84,23 @@ def _is_policy_denied(record) -> bool:
     return _inner_payload(record).get("type") == "hive.policy.denied"
 
 
+# HiveMessageType values, as strings — passing one of these as *msg_type* is
+# a caller bug: these helpers correlate against the OVOS message type carried
+# INSIDE a denied BUS message (e.g. "speak"), not the HiveMind envelope type.
+_HIVE_MESSAGE_TYPE_VALUES = frozenset(t.value for t in HiveMessageType)
+
+
 def _denied_records(satellite, msg_type: Optional[str] = None,
                     strict: bool = True):
     """Return ``hive.policy.denied`` records received by *satellite*.
+
+    Raises:
+        ValueError: if *msg_type* is a ``HiveMessageType`` value (e.g.
+            ``"bus"``, ``"escalate"``) instead of an OVOS message type (e.g.
+            ``"speak"``). Denials echo the OVOS type carried inside the BUS
+            envelope, never the envelope type itself, so passing a
+            HiveMessageType value here can never match and silently hides a
+            broken test.
 
     When *msg_type* is given, a denial matches only if it echoes that type.
     hivemind-core echoes it in ``data["denied_type"]``
@@ -99,6 +113,13 @@ def _denied_records(satellite, msg_type: Optional[str] = None,
     keeps them, but only when no typed denial matched — that way a correct
     typed denial is always preferred over an untyped guess.
     """
+    if msg_type in _HIVE_MESSAGE_TYPE_VALUES:
+        raise ValueError(
+            f"_denied_records: msg_type={msg_type!r} is a HiveMessageType "
+            "value, not an OVOS message type. Pass the OVOS message type "
+            "that was denied (e.g. 'speak'), not the HiveMind envelope type "
+            "('bus', 'escalate', ...) that carried it."
+        )
     typed = []
     untyped = []
     for r in satellite.recorder.snapshot():
@@ -761,10 +782,23 @@ def assert_cascade_routed(
         )
 
 
+def _ping_flood_id(record) -> Optional[Any]:
+    """Best-effort extraction of ``flood_id`` from a recorded PING/PROPAGATE."""
+    payload = record.payload
+    if isinstance(payload, dict):
+        if "flood_id" in payload:
+            return payload["flood_id"]
+        inner = payload.get("payload")
+        if isinstance(inner, dict) and "flood_id" in inner:
+            return inner["flood_id"]
+    return None
+
+
 def assert_ping_responded(
     master: MasterNode,
     satellite: SatelliteNode,
     timeout: float = 2.0,
+    since: Optional[float] = None,
 ) -> None:
     """Assert that a PING from *satellite* produced a responsive PING back.
 
@@ -788,13 +822,25 @@ def assert_ping_responded(
         master:    The master node.
         satellite: The satellite that sent the PING.
         timeout:   Seconds to wait for the responsive PING at the satellite.
+        since:     Only records at or after this ``time.monotonic()`` mark
+                   count. Pass :func:`recorder_mark` taken just before the
+                   probe emission, so a second back-to-back probe cannot pass
+                   on a leftover response from a previous one. When the probe
+                   payload carries ``flood_id``, the response is additionally
+                   correlated by that id — an unrelated PING/PROPAGATE record
+                   in the same window does not satisfy the assertion.
     """
     ping_types = (HiveMessageType.PING.value, HiveMessageType.PROPAGATE.value)
 
-    ping_out = [r for r in satellite.recorder.snapshot()
-                if r.direction == "out" and r.msg_type in ping_types]
-    ping_in = [r for r in master.recorder.snapshot()
-               if r.direction == "in" and r.msg_type in ping_types]
+    def _since(records):
+        if since is None:
+            return records
+        return [r for r in records if r.timestamp >= since]
+
+    ping_out = _since([r for r in satellite.recorder.snapshot()
+                        if r.direction == "out" and r.msg_type in ping_types])
+    ping_in = _since([r for r in master.recorder.snapshot()
+                       if r.direction == "in" and r.msg_type in ping_types])
     if not ping_out or not ping_in:
         raise AssertionError(
             f"PING was not delivered: satellite sent {len(ping_out)} "
@@ -802,10 +848,18 @@ def assert_ping_responded(
             f"Satellite records: {satellite.recorder.snapshot()}"
         )
 
+    flood_id = _ping_flood_id(ping_out[0])
+
+    def _matching_response():
+        candidates = _since([r for r in satellite.recorder.snapshot()
+                              if r.direction == "in" and r.msg_type in ping_types])
+        if flood_id is None:
+            return candidates
+        return [r for r in candidates if _ping_flood_id(r) == flood_id]
+
     deadline = time.monotonic() + timeout
     while True:
-        response = [r for r in satellite.recorder.snapshot()
-                    if r.direction == "in" and r.msg_type in ping_types]
+        response = _matching_response()
         if response:
             return
         if time.monotonic() >= deadline:
@@ -814,9 +868,10 @@ def assert_ping_responded(
 
     raise AssertionError(
         f"PING round-trip incomplete: the satellite never received a "
-        f"responsive PING (an inbound PROPAGATE carrying a PING) within "
-        f"{timeout}s. A bare PING is dropped by hivemind-core — wrap it in a "
-        f"PROPAGATE.\nSatellite records: {satellite.recorder.snapshot()}"
+        f"responsive PING (an inbound PROPAGATE carrying a PING"
+        f"{f' with flood_id={flood_id!r}' if flood_id is not None else ''}) "
+        f"within {timeout}s. A bare PING is dropped by hivemind-core — wrap "
+        f"it in a PROPAGATE.\nSatellite records: {satellite.recorder.snapshot()}"
     )
 
 

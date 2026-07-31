@@ -21,7 +21,12 @@ class InMemoryClientDatabase:
         # wrong client).
         self._next_id: int = 0
         # The loopback event loop reads this store from its own thread while
-        # the test thread writes it, so every access takes the lock.
+        # the test thread writes it, so every access to ``_clients`` and
+        # ``_next_id`` takes the lock. The lock protects the dict and the id
+        # counter only: it is released before a Client object is returned, so
+        # concurrent callers can get the same Client instance back and mutate
+        # it without synchronization. Treat returned Client objects as
+        # read-mostly, or synchronize their mutation yourself.
         self._lock = threading.RLock()
 
     # --- write API ---

@@ -27,6 +27,14 @@ from ovos_bus_client.session import Session
 
 _LOG = logging.getLogger(__name__)
 
+# run() persists min_protocol_version into the (session-isolated) XDG server
+# config — a process-global resource shared by every LoopbackNetworkProtocol
+# instance in this interpreter. Two live instances with different floors
+# would race to overwrite each other's setting. This registry tracks the
+# floor requested by each currently-running instance (keyed by id(), cleared
+# in stop()) so run() can detect the conflict and refuse instead of racing.
+_LIVE_FLOORS: Dict[int, int] = {}
+
 
 @dataclass
 class LoopbackNetworkProtocol(NetworkProtocol):
@@ -61,6 +69,15 @@ class LoopbackNetworkProtocol(NetworkProtocol):
     #: server starts. hivemind-core defaults to 2 (HIVEMIND-WIRE-1 §2), which
     #: rejects the plain-JSON password-less clients this harness exists to
     #: test (they top out at v1). Set higher in a test to exercise the floor.
+    #:
+    #: This value is written into the process-global (session-XDG) server
+    #: config, not an instance-local one — hivemind-core reads it from disk
+    #: with no per-instance scoping. Because of that, two
+    #: ``LoopbackNetworkProtocol`` instances running at the same time MUST
+    #: agree on ``min_protocol_version``: whichever wrote last would silently
+    #: overwrite the other's floor. ``run()`` raises ``RuntimeError`` instead
+    #: of allowing that race — build topologies with a single loopback floor
+    #: per test, or run conflicting floors sequentially.
     min_protocol_version: int = field(default=1)
 
     @property
@@ -96,6 +113,25 @@ class LoopbackNetworkProtocol(NetworkProtocol):
             _LOG.warning("LoopbackNetworkProtocol.run() called but server already running")
             return
 
+        # min_protocol_version is written into a process-global config file
+        # (see the field docstring). If another live instance is running
+        # with a different floor, writing ours would race it — refuse.
+        conflicts = {
+            floor for key, floor in _LIVE_FLOORS.items()
+            if key != id(self) and floor != self.min_protocol_version
+        }
+        if conflicts:
+            raise RuntimeError(
+                "LoopbackNetworkProtocol.run(): another live instance is "
+                f"running with min_protocol_version={sorted(conflicts)}, but "
+                f"this instance requests {self.min_protocol_version}. "
+                "min_protocol_version is written into the process-global "
+                "(session-XDG) server config, so concurrent instances with "
+                "different floors would race to overwrite each other's "
+                "setting. Use the same floor for all concurrently-running "
+                "instances, or run them sequentially."
+            )
+
         # Persist the harness protocol floor into the (session-isolated) XDG
         # server config BEFORE handle_new_client() runs its version gate —
         # without this, released hivemind-core (floor 2) silently rejects the
@@ -107,9 +143,18 @@ class LoopbackNetworkProtocol(NetworkProtocol):
             if cfg.get("min_protocol_version") != self.min_protocol_version:
                 cfg["min_protocol_version"] = self.min_protocol_version
                 cfg.store()
-        except Exception as e:  # config module moved/absent — fail loudly later
-            _LOG.warning(f"could not set min_protocol_version in server config: {e}")
+        except Exception as e:
+            # This fix exists precisely because upstream's config is fragile
+            # under this harness's session-isolated XDG setup — warning and
+            # continuing here would silently run the test against the wrong
+            # floor. Fail loudly instead.
+            raise RuntimeError(
+                f"LoopbackNetworkProtocol.run(): could not set "
+                f"min_protocol_version={self.min_protocol_version} in server "
+                f"config: {e}"
+            ) from e
 
+        _LIVE_FLOORS[id(self)] = self.min_protocol_version
         self._ready.clear()
         self._startup_error = None
 
@@ -444,3 +489,4 @@ class LoopbackNetworkProtocol(NetworkProtocol):
         self._clients.clear()
         self._sockets.clear()
         self._handler_tasks.clear()
+        _LIVE_FLOORS.pop(id(self), None)
