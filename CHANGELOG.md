@@ -8,6 +8,42 @@
 
 - fix: Han audit round 2 — regression fix, template repairs, assertion honesty, agent fidelity [\#37](https://github.com/JarbasHiveMind/hivescope/pull/37) ([JarbasAl](https://github.com/JarbasAl))
 
+## Unreleased
+
+**Han audit round 3:**
+
+- fix(loopback): `LoopbackNetworkProtocol.run()` writes `min_protocol_version`
+  into the process-global (session-XDG) server config. Two live instances
+  with different floors used to race to overwrite each other's setting;
+  `run()` now raises `RuntimeError` when it detects a live instance with a
+  conflicting floor, and the field docstring documents the constraint
+- fix(loopback): a failed `min_protocol_version` config write used to log a
+  warning and continue, silently running the test against the wrong floor.
+  `run()` now raises instead — this fix exists specifically to counter
+  upstream config fragility, so swallowing the failure defeated the point
+- fix(assertions): `assert_ping_responded` now takes `since=` (the
+  `recorder_mark()` pattern already used by `assert_destination_routed`) and
+  correlates the responsive PING by `flood_id` when the probe payload carries
+  one, so a second back-to-back probe can no longer pass on the first
+  probe's leftover response
+- fix(assertions): `_denied_records` (and therefore `assert_acl_enforced` /
+  `assert_policy_denied`) now raises `ValueError` when called with a
+  `HiveMessageType` value (`"bus"`, `"escalate"`, ...) instead of the OVOS
+  message type that was actually denied (`"speak"`) — the two were silently
+  interchangeable before and a caller passing the wrong one always failed to
+  correlate
+- docs(README): the ACL enforcement example asserted
+  `recorder.assert_not_received("bus")`, but the recorder logs inbound
+  traffic *before* policy runs, so the record exists whether or not the
+  message was denied. The example now asserts `assert_policy_denied`, the
+  signal that actually reflects enforcement
+- docs(LIBRARY): the three `pip install` examples pointed at
+  `hivescope@master`; the active branch is `dev`, matching the README
+- docs(database): the `InMemoryClientDatabase` lock docstring overstated its
+  guarantee ("every access takes the lock"). Scoped it to what it actually
+  protects — the dict and the id counter — returned `Client` objects are
+  shared and not internally synchronized
+
 ## [0.6.1a3](https://github.com/JarbasHiveMind/hivescope/tree/0.6.1a3) (2026-07-31)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.1a2...0.6.1a3)

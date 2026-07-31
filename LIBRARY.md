@@ -3,7 +3,7 @@
 Consumer install:
 
 ```bash
-pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@master"
+pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@dev"
 ```
 
 ---
@@ -42,7 +42,7 @@ remove the `xfail` marker and implement the response-assertion.
 ### 1. Install hivescope
 
 ```bash
-pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@master"
+pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@dev"
 ```
 
 Or add to your `pyproject.toml` test deps:
@@ -50,7 +50,7 @@ Or add to your `pyproject.toml` test deps:
 ```toml
 [project.optional-dependencies]
 test = [
-    "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@master",
+    "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@dev",
     "pytest>=7.4",
 ]
 ```
