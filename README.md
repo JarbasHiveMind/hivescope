@@ -18,13 +18,19 @@ multi-repo topology and stress scenarios.
 ## Install
 
 ```bash
-pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@dev"
+pip install hivescope
 ```
 
 With OVOS skill-level testing (live MiniCroft backend):
 
 ```bash
-pip install "hivescope[ovos] @ git+https://github.com/JarbasHiveMind/hivescope@dev"
+pip install "hivescope[ovos]"
+```
+
+To track `dev` instead of the last release:
+
+```bash
+pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@dev"
 ```
 
 ---
@@ -107,13 +113,15 @@ builder.stop_all()
 
 | Function | Topology |
 |---|---|
-| `single_satellite()` | 1 master `M0`, 1 satellite `S0` |
+| `single_satellite(allowed_types=None)` | 1 master `M0`, 1 satellite `S0` |
 | `three_satellites()` | 1 master `M0`, satellites `S0` to `S2` |
 | `with_relay()` | master → relay → satellites |
 | `chain_topology()` | linear relay chain |
-| `star_topology(n=5)` | central master, N satellites |
+| `star_topology(num_satellites=5)` | central master, N satellites |
 | `with_acl_enforcement()` | master with ACL-restricted and admin satellites |
-| `hierarchical_hubs(levels=3, sats=2)` | deeply nested relay tree |
+| `hierarchical_hubs(num_levels=3, sats_per_relay=2)` | deeply nested relay tree |
+| `admin_satellite()` | 1 master `M0`, 1 admin satellite `S0` |
+| `with_multiple_agent_protocols()` | master with a caller-supplied agent protocol |
 
 All functions return a **not-yet-started** `TopologyBuilder`. Call `.start_all()` before
 testing and `.stop_all()` in a `finally` block (or use the pytest fixtures for automatic teardown).
@@ -167,13 +175,13 @@ Enable in `conftest.py`: `pytest_plugins = ['hivescope.pytest_fixtures']`
 | `test_template_acl.py` | ACL enforcement: `allowed_types` denial and skill-blacklist injection |
 | `test_template_binary.py` | Binary protocol message handling |
 | `test_template_bridge1.py` | OVOS-BRIDGE-1 / SESSION-1 conformance: source stamping, destination routing, session fidelity, FIFO order |
-| `test_template_cascade.py` | CASCADE routing, pending core support, marked xfail |
+| `test_template_cascade.py` | CASCADE fan-out to master and sibling satellites |
 | `test_template_ping.py` | PING network-map round-trip: send `PROPAGATE(PING)`, assert the responsive PING |
 | `test_template_query.py` | QUERY routing, pending core support, marked xfail |
 | `test_template_rendezvous.py` | RENDEZVOUS handling, pending, marked xfail |
 | `test_template_passthrough.py` | Generic unhandled/user-land message passthrough routing |
 
-See [docs/index.md](docs/index.md#templates) for tracking links on the pending items.
+See [docs/index.md](docs/index.md#templates) for the pending items.
 
 ---
 

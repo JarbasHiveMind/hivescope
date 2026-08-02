@@ -12,13 +12,13 @@ The entire simulation runtime lives in `hivescope/`: topology builder, node type
 
 | Class | Purpose | Source |
 |---|---|---|
-| `TopologyBuilder` | Assembles and lifecycle-manages a test topology | `hivescope/topology.py:92` |
-| `MasterNode` | Hub node. Holds database, recorder, HiveMind listener protocol | `hivescope/node.py:98` |
-| `SatelliteNode` | Client node. Connects upstream, sends/receives HiveMessages | `hivescope/node.py:223` |
-| `RelayNode` | Dual-role node (master downstream, satellite upstream) | `hivescope/topology.py:45` |
-| `MessageRecorder` | Records all inbound/outbound HiveMessages for a node | `hivescope/recorder.py:24` |
-| `RecordedMessage` | Single recorded message with direction, type, payload, peer, timestamp | `hivescope/recorder.py:13` |
-| `InMemoryClientDatabase` | In-memory credential store used instead of a real database | `hivescope/database.py:11` |
+| `TopologyBuilder` | Assembles and lifecycle-manages a test topology | `hivescope/topology.py` |
+| `MasterNode` | Hub node. Holds database, recorder, HiveMind listener protocol | `hivescope/node.py` |
+| `SatelliteNode` | Client node. Connects upstream, sends/receives HiveMessages | `hivescope/node.py` |
+| `RelayNode` | Dual-role node (master downstream, satellite upstream) | `hivescope/topology.py` |
+| `MessageRecorder` | Records all inbound/outbound HiveMessages for a node | `hivescope/recorder.py` |
+| `RecordedMessage` | Single recorded message with direction, type, payload, peer, timestamp | `hivescope/recorder.py` |
+| `InMemoryClientDatabase` | In-memory credential store used instead of a real database | `hivescope/database.py` |
 | `TestAgentProtocol` | Agent protocol backed by FakeBus (fast, deterministic) | `hivescope/plugins/agent.py` |
 | `TestBinaryProtocol` | Binary protocol stub. Records binary messages, no-op processing | `hivescope/plugins/binary.py` |
 | `TestNetworkProtocol` | In-process network protocol, no sockets | `hivescope/plugins/network.py` |
@@ -26,7 +26,7 @@ The entire simulation runtime lives in `hivescope/`: topology builder, node type
 
 ## TopologyBuilder
 
-`hivescope/topology.py:92`
+`hivescope/topology.py`
 
 | Method | Returns | Notes |
 |---|---|---|
@@ -44,7 +44,7 @@ The entire simulation runtime lives in `hivescope/`: topology builder, node type
 
 ## MasterNode
 
-`hivescope/node.py:98`
+`hivescope/node.py`
 
 | Method / Attribute | Notes |
 |---|---|
@@ -59,7 +59,7 @@ The entire simulation runtime lives in `hivescope/`: topology builder, node type
 
 ## SatelliteNode
 
-`hivescope/node.py:223`
+`hivescope/node.py`
 
 | Method / Attribute | Notes |
 |---|---|
@@ -75,13 +75,13 @@ The entire simulation runtime lives in `hivescope/`: topology builder, node type
 
 ## RelayNode
 
-`hivescope/topology.py:45`
+`hivescope/topology.py`
 
 A thin wrapper that holds both a `MasterNode` (`.hm_protocol`) and a `SatelliteNode` (`.slave_protocol`). Constructed by `TopologyBuilder.add_relay()`. Access via `builder.get_relay(name)`.
 
 ## MessageRecorder
 
-`hivescope/recorder.py:24`
+`hivescope/recorder.py`
 
 | Method | Notes |
 |---|---|
@@ -91,12 +91,14 @@ A thin wrapper that holds both a `MasterNode` (`.hm_protocol`) and a `SatelliteN
 | `assert_not_received(msg_type, direction=None)` | Raises `AssertionError` if message was seen |
 | `received(msg_type, direction=None)` | `List[RecordedMessage]`, all matching records (empty list if none) |
 | `clear()` | Reset all recorded messages |
+| `snapshot()` | Copy of the records as they stand now |
+| `messages` | The record list itself. `records` is an alias |
 
-`RecordedMessage` attributes: `direction` (`"in"`, `"out"`, or `"bus_inject"`), `msg_type`, `payload`, `peer`, `timestamp`.
+`RecordedMessage` attributes: `direction` (`"in"`, `"out"`, `"bus_inject"`, or `"bus_emit"`), `msg_type`, `payload`, `peer`, `timestamp`.
 
 ## InMemoryClientDatabase
 
-`hivescope/database.py:11`
+`hivescope/database.py`
 
 Implements the HiveMind client database interface backed by a plain dict. `MasterNode` uses it automatically. You can also use it standalone.
 
@@ -136,8 +138,8 @@ Implements the HiveMind client database interface backed by a plain dict. `Maste
 | `assert_escalate_delivered(master, count=1)` | Asserts master received `count` inbound ESCALATE messages |
 | `assert_intercom_delivered(recipient, count=1)` | Asserts `recipient` satellite received `count` inbound INTERCOM messages |
 | `assert_binary_delivered(master, expected_payload=None, count=1)` | Asserts master received `count` BINARY messages. If `expected_payload` is given, also checks it was delivered |
-| `assert_query_routed(master, count=1)` | PENDING: QUERY routing not yet in hivemind-core ([core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88)). Use with `@pytest.mark.xfail(strict=False)` |
-| `assert_cascade_routed(*nodes, count=1)` | PENDING: CASCADE routing not yet in hivemind-core (core#74 / ws#88), xfail |
+| `assert_query_routed(master, count=1)` | Asserts master recorded `count` QUERY messages. The QUERY payload must be a nested `HiveMessage`, not a bare `Message` |
+| `assert_cascade_routed(*nodes, count=1)` | Asserts every node recorded `count` CASCADE messages. Same nested-payload rule as QUERY |
 | `assert_ping_responded(master, satellite)` | PING round-trip. There is no PONG: the answer is the node's own PING inside a PROPAGATE. Send `PROPAGATE(PING)`; a bare PING is dropped by core |
 | `assert_rendezvous_handled(master, count=1)` | PENDING: RENDEZVOUS not yet implemented ([ws#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103)), xfail |
 | `assert_passthrough_message_delivered(node, message_type, count=1, direction=None)` | Asserts `count` unhandled/user-land `message_type` messages at `node` (e.g. RENDEZVOUS). Verify routing status against `LIBRARY.md` before relying on this |
@@ -160,7 +162,7 @@ Implements the HiveMind client database interface backed by a plain dict. `Maste
 | Function | Notes |
 |---|---|
 | `assert_acl_enforced(master, satellite, msg_type, allowed=False)` | Fully implemented ACL enforcement check. `allowed=False` (default) verifies the satellite received a `hive.policy.denied` response. `allowed=True` verifies the message was recorded at master's `bus_inject` level |
-| `assert_policy_denied(master, satellite, msg_type, deny_code=None)` | Asserts `satellite` received a `hive.policy.denied` response for `msg_type`. If `deny_code` is given, checks the denial carries that stable code (e.g. `"acl_disallowed_type"`) |
+| `assert_policy_denied(master, satellite, msg_type, deny_code=None, strict=True)` | Asserts `satellite` received a `hive.policy.denied` response for `msg_type`. If `deny_code` is given, checks the denial carries that stable code (e.g. `"acl_disallowed_type"`). Set `strict=False` to accept a denial that names no message type |
 | `assert_session_blacklists_injected(master, satellite, msg_type, expected_skills=None, expected_intents=None)` | Asserts the policy chain injected the expected `blacklisted_skills` / `blacklisted_intents` into the session of a bus-injected message |
 
 ## Preset Scenarios
@@ -171,11 +173,12 @@ All functions return a fully wired (not yet started) `TopologyBuilder`.
 
 | Function | Topology |
 |---|---|
-| `single_satellite()` | 1 master `M0`, 1 satellite `S0` |
+| `single_satellite(allowed_types=None)` | 1 master `M0`, 1 satellite `S0` |
 | `three_satellites()` | 1 master `M0`, satellites `S0`–`S2` |
 | `with_relay()` | 1 master `M0`, 1 relay `R0`, satellites under relay |
 | `chain_topology()` | Master → relay → satellites |
 | `star_topology(num_satellites=5)` | Central master, N satellites |
+| `admin_satellite(allowed_types=None)` | 1 master `M0`, 1 admin satellite `S0` |
 | `with_acl_enforcement()` | Master with ACL-restricted and admin satellites |
 | `hierarchical_hubs(num_levels=3, sats_per_relay=2)` | Deeply nested relay tree |
 | `with_multiple_agent_protocols()` | Master configured with custom protocol set |
@@ -203,9 +206,9 @@ All functions return a fully wired (not yet started) `TopologyBuilder`.
 | `test_template_acl.py` | ACL enforcement: `allowed_types` denial and skill-blacklist injection |
 | `test_template_binary.py` | Binary protocol message handling |
 | `test_template_bridge1.py` | OVOS-BRIDGE-1 / SESSION-1 / SESSION-2 conformance: source stamping, destination routing, session fidelity, FIFO order |
-| `test_template_cascade.py` | CASCADE routing, pending core support ([core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88)), marked xfail |
+| `test_template_cascade.py` | CASCADE fan-out and responses |
 | `test_template_ping.py` | PING network-map round-trip: send `PROPAGATE(PING)` and assert the responsive PING |
-| `test_template_query.py` | QUERY routing, pending core support (core#74 / ws#88), marked xfail |
+| `test_template_query.py` | QUERY routing up to the master |
 | `test_template_rendezvous.py` | RENDEZVOUS handling, pending ([ws#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103)), marked xfail |
 | `test_template_passthrough.py` | Generic unhandled/user-land message passthrough routing |
 
