@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.5a2](https://github.com/JarbasHiveMind/hivescope/tree/0.6.5a2) (2026-08-02)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.5a1...0.6.5a2)
+
+**Merged pull requests:**
+
+- chore: relicense to Apache-2.0 \(no AGPL\) [\#48](https://github.com/JarbasHiveMind/hivescope/pull/48) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.6.5a1](https://github.com/JarbasHiveMind/hivescope/tree/0.6.5a1) (2026-07-31)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.4a1...0.6.5a1)
