@@ -2,7 +2,7 @@
 Hivescope self-tests — protocol-matrix coverage.
 
 These tests verify hivescope's own assertion helpers and templates against
-the 14 HiveMessageType values.  They stand in for the CI build-tests path
+the 13 HiveMessageType values.  They stand in for the CI build-tests path
 (`test_path: 'tests'`) and catch regressions in the library itself.
 
 Ready types (core routing implemented):
@@ -14,7 +14,10 @@ Pending types (xfail scaffolds, strict=False):
   CASCADE    — core#74 / ws#88
   PING       — core#74  (partial)
   RENDEZVOUS — ws#103
-  THIRDPRTY  — verify status
+
+Generic:
+  assert_passthrough_message_delivered — unhandled/user-land message types
+  traverse the mesh untouched (e.g. RENDEZVOUS)
 
 ACL enforcement:
   assert_acl_enforced / assert_broadcast_blocked
@@ -63,7 +66,7 @@ from hivescope.assertions import (
     assert_cascade_routed,
     assert_ping_responded,
     assert_rendezvous_handled,
-    assert_thirdparty_passed,
+    assert_passthrough_message_delivered,
 )
 from hivescope.assertions import assert_policy_denied, assert_session_blacklists_injected
 from hivescope.scenarios import single_satellite, three_satellites, with_relay
@@ -458,16 +461,18 @@ def test_rendezvous_handled():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# THIRDPRTY (verify passthrough)
+# Generic passthrough (unhandled message type traverses the mesh untouched)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_thirdparty_passed():
+def test_passthrough_message_delivered():
     b = single_satellite()
     b.start_all()
     try:
         m = b.get_master("M0")
         s = b.get_satellite("S0")
-        s.send(HiveMessage(HiveMessageType.THIRDPRTY, payload={"custom": "payload"}))
-        assert_thirdparty_passed(m, count=1, direction="in")
+        s.send(HiveMessage(HiveMessageType.RENDEZVOUS, payload={"custom": "payload"}))
+        assert_passthrough_message_delivered(
+            m, HiveMessageType.RENDEZVOUS, count=1, direction="in"
+        )
     finally:
         b.stop_all()

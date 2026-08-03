@@ -5,7 +5,7 @@ Each helper targets one or more ``HiveMessageType`` values and raises
 ``AssertionError`` with a diagnostic message (actual recorder contents,
 peer lists, etc.) on failure.
 
-All 14 HiveMessageType values are covered:
+All 13 HiveMessageType values are covered:
 
 Ready (core routing implemented):
   HANDSHAKE  — assert_handshake_complete, assert_encryption_match
@@ -24,7 +24,11 @@ Pending (core routing not yet implemented; helpers scaffold the check):
   QUERY      — assert_query_routed        (xfail: core#74 / ws#88)
   CASCADE    — assert_cascade_routed      (xfail: core#74 / ws#88)
   RENDEZVOUS — assert_rendezvous_handled  (xfail: ws#103)
-  THIRDPRTY  — assert_thirdparty_passed   (verify status)
+
+Generic:
+  assert_passthrough_message_delivered — asserts an unhandled/user-land
+  message type traverses the mesh untouched. Takes the ``HiveMessageType``
+  as an argument, so it works for any type with no core-side handler.
 
 Usage::
 
@@ -724,7 +728,7 @@ def assert_client_not_registered(master: MasterNode, peer: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PENDING — QUERY, CASCADE, PING, RENDEZVOUS, THIRDPRTY
+# PENDING — QUERY, CASCADE, PING, RENDEZVOUS
 #
 # These helpers are honest scaffolds for message types whose core routing is
 # not yet implemented. Tests that use them MUST be decorated with:
@@ -896,20 +900,24 @@ def assert_rendezvous_handled(
         )
 
 
-def assert_thirdparty_passed(
+def assert_passthrough_message_delivered(
     node,
+    message_type,
     count: int = 1,
     direction: Optional[str] = None,
 ) -> None:
-    """Assert that *count* THIRDPRTY (3rdparty) messages were passed through *node*.
+    """Assert that *count* messages of *message_type* were passed through *node*
+    untouched.
 
-    THIRDPRTY is user-land passthrough; core is expected to forward it without
-    inspection. Verify the routing status against the matrix in ``LIBRARY.md``.
+    Use this for message types with no core-side handler (e.g. RENDEZVOUS,
+    which has a wire code but is not routed by hivemind-core): core is
+    expected to forward the payload without inspection. Verify the routing
+    status against the matrix in ``LIBRARY.md``.
     """
-    matches = _find(node.recorder, HiveMessageType.THIRDPRTY.value, direction=direction)
+    matches = _find(node.recorder, message_type.value, direction=direction)
     if len(matches) != count:
         raise AssertionError(
-            f"Expected {count} THIRDPRTY message(s) (direction={direction!r}) "
+            f"Expected {count} {message_type.name} message(s) (direction={direction!r}) "
             f"at '{node.recorder.name}', got {len(matches)}.\n"
             f"All records: {node.recorder.snapshot()}"
         )

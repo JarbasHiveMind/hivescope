@@ -10,7 +10,7 @@ pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@dev"
 
 ## Protocol-matrix coverage
 
-14 `HiveMessageType` values, each with an assertion helper and a copy-paste template.
+13 `HiveMessageType` values, each with an assertion helper and a copy-paste template.
 
 | Message type | Value | Assertion helper | Template | Status |
 |---|---|---|---|---|
@@ -27,7 +27,10 @@ pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@dev"
 | CASCADE | `cascade` | `assert_cascade_routed` | `test_template_cascade.py` | **pending** — [core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88) |
 | PING | `ping` | `assert_ping_responded` | `test_template_ping.py` | **ready** — send `PROPAGATE(PING)`; a bare PING is not routed |
 | RENDEZVOUS | `rendezvous` | `assert_rendezvous_handled` | `test_template_rendezvous.py` | **pending** — [ws#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103) |
-| THIRDPRTY | `3rdparty` | `assert_thirdparty_passed` | `test_template_thirdparty.py` | **verify** — passthrough; routing status TBD |
+
+Generic (any unhandled/user-land type): `assert_passthrough_message_delivered(node, message_type, ...)` —
+`test_template_passthrough.py`. Asserts the payload traverses the mesh untouched;
+takes the `HiveMessageType` as an argument instead of being bound to one type.
 
 Pending tests are decorated `@pytest.mark.xfail(strict=False)` — they will show
 as `xfail` (expected failures) rather than errors. When the referenced PR lands,
@@ -152,7 +155,7 @@ top level; import them directly):
 ```python
 from hivescope.assertions import (
     assert_query_routed, assert_cascade_routed,
-    assert_ping_responded, assert_rendezvous_handled, assert_thirdparty_passed,
+    assert_ping_responded, assert_rendezvous_handled, assert_passthrough_message_delivered,
 )
 ```
 
@@ -172,4 +175,3 @@ pytest_plugins = ['hivescope.pytest_fixtures']
 | [hivemind-core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) | QUERY, CASCADE | Remove `xfail` in templates + tests; implement response assertions |
 | [hivemind-websocket-client#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88) | QUERY, CASCADE | Remove `xfail` in templates + tests |
 | [hivemind-websocket-client#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103) | RENDEZVOUS | Remove `xfail`; add rendezvous-node fixture to topology |
-| THIRDPRTY verify | THIRDPRTY | Run test; if passes, remove xfail; if not routed, add xfail with issue ref |

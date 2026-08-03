@@ -140,7 +140,7 @@ Implements the HiveMind client database interface backed by a plain dict. `Maste
 | `assert_cascade_routed(*nodes, count=1)` | PENDING: CASCADE routing not yet in hivemind-core (core#74 / ws#88), xfail |
 | `assert_ping_responded(master, satellite)` | PING round-trip. There is no PONG: the answer is the node's own PING inside a PROPAGATE. Send `PROPAGATE(PING)`; a bare PING is dropped by core |
 | `assert_rendezvous_handled(master, count=1)` | PENDING: RENDEZVOUS not yet implemented ([ws#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103)), xfail |
-| `assert_thirdparty_passed(node, count=1, direction=None)` | Asserts `count` THIRDPRTY (user-land passthrough) messages at `node`. Verify routing status against `LIBRARY.md` before relying on this |
+| `assert_passthrough_message_delivered(node, message_type, count=1, direction=None)` | Asserts `count` unhandled/user-land `message_type` messages at `node` (e.g. RENDEZVOUS). Verify routing status against `LIBRARY.md` before relying on this |
 
 ### OVOS-BRIDGE-1 / SESSION-1 conformance
 
@@ -207,7 +207,7 @@ All functions return a fully wired (not yet started) `TopologyBuilder`.
 | `test_template_ping.py` | PING network-map round-trip: send `PROPAGATE(PING)` and assert the responsive PING |
 | `test_template_query.py` | QUERY routing, pending core support (core#74 / ws#88), marked xfail |
 | `test_template_rendezvous.py` | RENDEZVOUS handling, pending ([ws#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103)), marked xfail |
-| `test_template_thirdparty.py` | THIRDPRTY (user-land) passthrough routing |
+| `test_template_passthrough.py` | Generic unhandled/user-land message passthrough routing |
 
 ## Contents
 
