@@ -171,7 +171,7 @@ Enable in `conftest.py`: `pytest_plugins = ['hivescope.pytest_fixtures']`
 | `test_template_ping.py` | PING network-map round-trip: send `PROPAGATE(PING)`, assert the responsive PING |
 | `test_template_query.py` | QUERY routing, pending core support, marked xfail |
 | `test_template_rendezvous.py` | RENDEZVOUS handling, pending, marked xfail |
-| `test_template_thirdparty.py` | THIRDPRTY (user-land) passthrough routing |
+| `test_template_passthrough.py` | Generic unhandled/user-land message passthrough routing |
 
 See [docs/index.md](docs/index.md#templates) for tracking links on the pending items.
 
