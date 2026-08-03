@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.5a3](https://github.com/JarbasHiveMind/hivescope/tree/0.6.5a3) (2026-08-03)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.5a2...0.6.5a3)
+
+**Merged pull requests:**
+
+- refactor: replace assert\_thirdparty\_passed with type-neutral passthrough assertion [\#51](https://github.com/JarbasHiveMind/hivescope/pull/51) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.6.5a2](https://github.com/JarbasHiveMind/hivescope/tree/0.6.5a2) (2026-08-02)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.5a1...0.6.5a2)
