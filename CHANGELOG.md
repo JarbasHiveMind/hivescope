@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.6a1](https://github.com/JarbasHiveMind/hivescope/tree/0.6.6a1) (2026-08-10)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.5a3...0.6.6a1)
+
+**Merged pull requests:**
+
+- fix: a forwarded BROADCAST keeps its envelope, so assert through it [\#53](https://github.com/JarbasHiveMind/hivescope/pull/53) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.6.5a3](https://github.com/JarbasHiveMind/hivescope/tree/0.6.5a3) (2026-08-03)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.5a2...0.6.5a3)
