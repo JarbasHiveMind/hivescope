@@ -372,6 +372,7 @@ class LoopbackNetworkProtocol(NetworkProtocol):
             is_admin=db_client.is_admin,
             can_escalate=db_client.can_escalate,
             can_propagate=db_client.can_propagate,
+            can_broadcast=db_client.can_broadcast,
             # hivemind-core is whitelist-only now: admission is via allowed_types;
             # the old msg_/skill_/intent_blacklist kwargs were removed from
             # HiveMindClientConnection (skill/intent blacklists live in
