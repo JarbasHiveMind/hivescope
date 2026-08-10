@@ -23,8 +23,8 @@ pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@dev"
 | ESCALATE | `escalate` | `assert_escalate_delivered` | `test_template_routing.py` | **ready** |
 | INTERCOM | `intercom` | `assert_intercom_delivered` | `test_template_routing.py` | **ready** |
 | BINARY | `bin` | `assert_binary_delivered` | `test_template_binary.py` | **ready** |
-| QUERY | `query` | `assert_query_routed` | `test_template_query.py` | **pending** — [core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88) |
-| CASCADE | `cascade` | `assert_cascade_routed` | `test_template_cascade.py` | **pending** — [core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88) |
+| QUERY | `query` | `assert_query_routed` | `test_template_query.py` | **ready** — the inner payload must be a `HiveMessage`, not a bare `Message` |
+| CASCADE | `cascade` | `assert_cascade_routed` | `test_template_cascade.py` | **ready** — the inner payload must be a `HiveMessage`, not a bare `Message` |
 | PING | `ping` | `assert_ping_responded` | `test_template_ping.py` | **ready** — send `PROPAGATE(PING)`; a bare PING is not routed |
 | RENDEZVOUS | `rendezvous` | `assert_rendezvous_handled` | `test_template_rendezvous.py` | **pending** — [ws#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103) |
 
@@ -32,9 +32,9 @@ Generic (any unhandled/user-land type): `assert_passthrough_message_delivered(no
 `test_template_passthrough.py`. Asserts the payload traverses the mesh untouched;
 takes the `HiveMessageType` as an argument instead of being bound to one type.
 
-Pending tests are decorated `@pytest.mark.xfail(strict=False)` — they will show
-as `xfail` (expected failures) rather than errors. When the referenced PR lands,
-remove the `xfail` marker and implement the response-assertion.
+Pending tests are decorated `@pytest.mark.xfail(strict=False)`. They show as
+`xfail` (expected failures) rather than errors. When the type gets a handler in
+hivemind-core, remove the `xfail` marker and add the response assertion.
 
 ---
 
@@ -149,8 +149,8 @@ from hivescope import (
 )
 ```
 
-Type-specific pending helpers live in `hivescope.assertions` (not re-exported at
-top level; import them directly):
+These type-specific helpers live in `hivescope.assertions` and are not re-exported at
+top level. Import them directly:
 
 ```python
 from hivescope.assertions import (
@@ -168,9 +168,9 @@ pytest_plugins = ['hivescope.pytest_fixtures']
 
 ---
 
-## Pending cells — what to do when PRs land
+## Pending cells — what to do when support lands
 
-| PR | Type | Action |
+| Type | Blocker | Action when it lands |
 |---|---|---|
 | [hivemind-core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) | QUERY, CASCADE | Remove `xfail` in templates + tests; implement response assertions |
 | [hivemind-websocket-client#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88) | QUERY, CASCADE | Remove `xfail` in templates + tests |
