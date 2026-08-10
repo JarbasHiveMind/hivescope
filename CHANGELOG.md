@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.0a1](https://github.com/JarbasHiveMind/hivescope/tree/0.7.0a1) (2026-08-10)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.6a1...0.7.0a1)
+
+**Merged pull requests:**
+
+- docs: QUERY and CASCADE are supported, and fix their templates [\#50](https://github.com/JarbasHiveMind/hivescope/pull/50) ([JarbasAl](https://github.com/JarbasAl))
+- feat: forward can\_broadcast onto the client connection [\#30](https://github.com/JarbasHiveMind/hivescope/pull/30) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.6.6a1](https://github.com/JarbasHiveMind/hivescope/tree/0.6.6a1) (2026-08-10)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.5a3...0.6.6a1)
