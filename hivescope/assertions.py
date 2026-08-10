@@ -70,6 +70,28 @@ def _find(recorder, msg_type_value: str, direction: Optional[str] = None):
     ]
 
 
+def _find_broadcast_inner(recorder, inner_msg_type: str):
+    """Inbound broadcasts of *inner_msg_type*, wrapped or bare.
+
+    A current core forwards the BROADCAST envelope with the payload still
+    inside it, so the record's own ``msg_type`` is ``broadcast`` and the type
+    being asked about sits in ``payload["msg_type"]``. A pre-#216 core
+    unwrapped it and the record's own type was the inner one. Accept both so
+    the assertion pins delivery rather than one core's framing.
+    """
+    found = []
+    for r in recorder.snapshot():
+        if r.direction != "in":
+            continue
+        if r.msg_type == inner_msg_type:
+            found.append(r)
+        elif (r.msg_type == HiveMessageType.BROADCAST.value
+              and isinstance(r.payload, dict)
+              and r.payload.get("msg_type") == inner_msg_type):
+            found.append(r)
+    return found
+
+
 # Message types that are connection setup or keepalive, never payload traffic.
 _NON_PAYLOAD_TYPES = (
     HiveMessageType.HANDSHAKE.value,
@@ -289,11 +311,11 @@ def assert_broadcast_delivered(
 ) -> None:
     """Assert that the BROADCAST reached every node in *recipients*.
 
-    HiveMind core *unwraps* a BROADCAST into its inner payload before
-    forwarding to sibling peers — so each recipient records the *inner*
-    message type (e.g. ``BUS``), not ``BROADCAST`` itself.  This helper
-    therefore counts all inbound messages at recipients; pass
-    ``inner_msg_type`` to narrow to a specific type.
+    Since HiveMind-core#216 a forwarded BROADCAST keeps its envelope
+    (``_rewrap``, HIVEMIND-NODE-1 §3.3): a recipient records a ``broadcast``
+    carrying the inner payload, not the bare inner message. Older cores
+    unwrapped it and recorded the inner type directly, so ``inner_msg_type``
+    matches either shape.
 
     Args:
         recipients: Nodes that should have received the broadcast.
@@ -304,7 +326,7 @@ def assert_broadcast_delivered(
     errors: List[str] = []
     for node in recipients:
         if inner_msg_type:
-            matches = _find(node.recorder, inner_msg_type, direction="in")
+            matches = _find_broadcast_inner(node.recorder, inner_msg_type)
             label = f"BROADCAST(inner={inner_msg_type})"
         else:
             # Count inbound payload messages only: connection-setup and

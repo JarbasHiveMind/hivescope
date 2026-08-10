@@ -9,6 +9,13 @@ Two paths, and they are not the same:
   sees it, but no ``BinaryDataHandlerProtocol`` method runs.
 * A **typed** payload (``RAW_AUDIO``, ``STT_AUDIO_TRANSCRIBE``, …) is
   dispatched to the matching handler, so ``binary_protocol.calls`` fills in.
+
+Both need a satellite with a **non-empty** ``allowed_types`` whitelist.
+hivemind-core's MessageTypeACLPolicy denies every binary payload from a
+client that is granted no message type at all — otherwise a client that may
+not emit a single bus message could still push RAW_AUDIO into the STT
+pipeline and FILE payloads to disk. The specific types do not matter to the
+binary path; having some does.
 """
 
 from hivemind_bus_client.message import (HiveMessage, HiveMessageType,
@@ -20,7 +27,7 @@ from hivescope.scenarios import single_satellite
 
 def test_untyped_binary_reaches_the_master():
     payload = b"\x00\x01\x02hello-binary\xff\xfe"
-    b = single_satellite()
+    b = single_satellite(allowed_types=["recognizer_loop:utterance", "speak"])
     b.start_all()
     try:
         m = b.get_master("M0")
@@ -35,7 +42,7 @@ def test_untyped_binary_reaches_the_master():
 
 def test_typed_binary_reaches_the_handler():
     payload = b"\x00\x01\x02fake-audio\xff\xfe"
-    b = single_satellite()
+    b = single_satellite(allowed_types=["recognizer_loop:utterance", "speak"])
     b.start_all()
     try:
         m = b.get_master("M0")
