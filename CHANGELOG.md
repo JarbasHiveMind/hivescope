@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1a1](https://github.com/JarbasHiveMind/hivescope/tree/0.7.1a1) (2026-08-13)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.7.0a1...0.7.1a1)
+
+**Merged pull requests:**
+
+- fix: the client shim reports the link password [\#56](https://github.com/JarbasHiveMind/hivescope/pull/56) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.7.0a1](https://github.com/JarbasHiveMind/hivescope/tree/0.7.0a1) (2026-08-10)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.6.6a1...0.7.0a1)
