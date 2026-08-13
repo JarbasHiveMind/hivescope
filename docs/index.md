@@ -72,6 +72,7 @@ The entire simulation runtime lives in `hivescope/`: topology builder, node type
 | `peer` | This satellite's peer identifier (set after handshake) |
 | `recorder` | `MessageRecorder` for all inbound/outbound HiveMessages |
 | `shim.crypto_key` | Negotiated session key (set after handshake). Lives on the `InProcessHiveShim`, not directly on `SatelliteNode` |
+| `shim.password` | The password `InProcessHiveShim` reports for the link to the master — read off the node's identity, since the shim has no separate credential store. Needed because the protocol now reads credentials off the client object, not off the node identity |
 
 ## RelayNode
 

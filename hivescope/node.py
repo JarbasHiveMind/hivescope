@@ -46,8 +46,12 @@ class InProcessHiveShim:
     - emit(HiveMessage)  → routes upstream to the master's handle_message()
     - on(event, func)    → registers on the internal EventEmitter
     - emitter            → the EventEmitter that dispatches inbound messages
-    - crypto_key, cipher, json_encoding, handshake_event, session_id  — all
-      the attributes SlaveProtocol sets/reads during the handshake
+    - crypto_key, cipher, json_encoding, handshake_event, session_id, password
+      — all the attributes SlaveProtocol reads off a client during the
+      handshake and connection lifecycle. `password` is read off the shim's
+      identity, the same way `useragent` and `site_id` are — a real client
+      keeps credentials on itself rather than on the node identity, and the
+      shim has no separate credential store to mirror that with.
     """
 
     def __init__(self, identity: NodeIdentity, satellite_ref: "SatelliteNode"):
@@ -69,6 +73,18 @@ class InProcessHiveShim:
     @property
     def session_id(self) -> str:
         return self._session_id
+
+    @property
+    def password(self) -> str:
+        """The password for the link to the master.
+
+        A real client keeps its credentials on the client rather than on the
+        node identity, because they say how to reach one particular master
+        and are not part of who the node is. This shim has no separate
+        credential store, so it reports the identity's — the same way it
+        reports the useragent and the site.
+        """
+        return self.identity.password
 
     @property
     def site_id(self) -> Optional[str]:
