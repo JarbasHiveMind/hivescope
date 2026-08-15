@@ -38,7 +38,7 @@ dependencies = [
     # unpinned pyOpenSSL: the released wheel pins pyopenssl==22.0.0, whose
     # loose floor lets cryptography float to >=42 where the bindings that
     # pyOpenSSL 22 needs (e.g. GEN_EMAIL) no longer exist.
-    "cryptography<42",
+    "cryptography<51",
 ]
 
 [project.optional-dependencies]
