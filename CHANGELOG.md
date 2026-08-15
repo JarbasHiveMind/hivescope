@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1a2](https://github.com/JarbasHiveMind/hivescope/tree/0.7.1a2) (2026-08-15)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.7.1a1...0.7.1a2)
+
+**Merged pull requests:**
+
+- docs: add AGENTS.md with per-repo agent conventions [\#58](https://github.com/JarbasHiveMind/hivescope/pull/58) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.7.1a1](https://github.com/JarbasHiveMind/hivescope/tree/0.7.1a1) (2026-08-13)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.7.0a1...0.7.1a1)
