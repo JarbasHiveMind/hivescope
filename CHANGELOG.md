@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.2a1](https://github.com/JarbasHiveMind/hivescope/tree/0.7.2a1) (2026-08-15)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.7.1a2...0.7.2a1)
+
+**Merged pull requests:**
+
+- Update dependency cryptography to v50 [\#40](https://github.com/JarbasHiveMind/hivescope/pull/40) ([renovate[bot]](https://github.com/apps/renovate))
+
 ## [0.7.1a2](https://github.com/JarbasHiveMind/hivescope/tree/0.7.1a2) (2026-08-15)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.7.1a1...0.7.1a2)
