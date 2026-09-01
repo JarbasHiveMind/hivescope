@@ -40,7 +40,7 @@ Usage::
 """
 
 import time
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from hivescope.node import MasterNode, SatelliteNode
 from hivemind_bus_client.message import HiveMessageType
@@ -1165,21 +1165,36 @@ def assert_session_inbound_preserved(
     satellite: SatelliteNode,
     expected_session: dict,
 ) -> None:
-    """Assert the satellite's session is preserved into the bus context on injection.
+    """Assert the satellite's session CONTENTS are preserved into the bus
+    context on injection.
 
     BRIDGE-1 §4.1 (inbound): "The bridge MUST extract the session from the
     external payload and place it in the bus Message context."
 
-    Checks that the last ``bus_inject`` record from *satellite* has a
-    ``context["session"]["session_id"]`` matching *expected_session*'s
-    ``session_id`` (and any other keys explicitly set in *expected_session*).
+    Checks that the last ``bus_inject`` record from *satellite* has each key
+    of *expected_session* present and equal in ``context["session"]``.
+
+    ``session_id`` is deliberately NOT accepted here: since hivemind-core
+    NATs a non-admin's declared session_id to ``f"{conn_nonce}:{declared}"``
+    before it reaches the bus (HIVEMIND-BRIDGE-1 §4), it is never preserved
+    verbatim and an exact-match check on it would be a caller bug baked into
+    the harness. Use :func:`assert_session_id_natted` for the id, and this
+    helper only for the session's other fields (lang, location, units, ...).
 
     Args:
         master:           The master node.
         satellite:        The satellite that sent the message.
-        expected_session: Dict of session fields that must be present and equal
-                          in the injected message's context.session.
+        expected_session: Dict of session fields (excluding ``session_id``)
+                          that must be present and equal in the injected
+                          message's context.session.
     """
+    if "session_id" in expected_session:
+        raise ValueError(
+            "assert_session_inbound_preserved: 'session_id' is NATted per "
+            "connection, not preserved verbatim — use "
+            "assert_session_id_natted() to check it."
+        )
+
     peer = satellite.peer
     records = [
         r for r in master.recorder.snapshot()
@@ -1207,6 +1222,207 @@ def assert_session_inbound_preserved(
         raise AssertionError(
             "assert_session_inbound_preserved: BRIDGE-1 §4.1 inbound session "
             "fidelity failures:\n  " + "\n  ".join(errors)
+        )
+
+
+def assert_session_id_natted(
+    master: MasterNode,
+    satellite: SatelliteNode,
+    declared_id: str,
+    *,
+    admin: bool = False,
+) -> None:
+    """Assert the Layer-1 session id installed on *satellite*'s last inbound
+    message is the NATted form of *declared_id*.
+
+    HIVEMIND-BRIDGE-1 §4: a non-admin's declared session_id is namespaced by
+    the connection's nonce (``f"{conn_nonce}:{declared_id}"``) before it
+    reaches the bus, so two peers that happen to declare the same id (e.g.
+    both "default") never collide onto one OVOS session. An admin connection
+    is trusted to address orchestrator sessions directly and is stamped with
+    the raw declared id instead.
+
+    Reads the live ``conn_nonce`` off the master's
+    ``HiveMindClientConnection`` for *satellite*'s peer and asserts the exact
+    NATted string, not just its shape — a wrong or stale nonce cannot slip
+    through a merely-structural check.
+
+    Args:
+        master:      The master node.
+        satellite:   The satellite whose last bus_inject is inspected.
+        declared_id: The session_id *satellite* declared on the wire.
+        admin:       True if the satellite is connected as an admin: the id
+                     is expected raw, not NATted.
+    """
+    peer = satellite.peer
+    if peer is None:
+        raise AssertionError(
+            "assert_session_id_natted: satellite has no peer — it is disconnected."
+        )
+    records = [
+        r for r in master.recorder.snapshot()
+        if r.direction == "bus_inject" and r.peer == peer
+    ]
+    if not records:
+        raise AssertionError(
+            f"assert_session_id_natted: no bus_inject records from "
+            f"peer={peer!r}.\nAll records: {master.recorder.snapshot()}"
+        )
+
+    msg = records[-1].payload
+    actual = ((getattr(msg, "context", {}) or {}).get("session") or {}).get("session_id")
+
+    if admin:
+        expected = declared_id
+    else:
+        conn = master.hm_protocol.clients.get(peer)
+        if conn is None:
+            raise AssertionError(
+                f"assert_session_id_natted: peer {peer!r} is not (or no longer) "
+                "connected at master — cannot read its conn_nonce."
+            )
+        expected = f"{conn.conn_nonce}:{declared_id}"
+
+    if actual != expected:
+        raise AssertionError(
+            "assert_session_id_natted: BRIDGE-1 §4 per-connection NAT mismatch "
+            f"— expected session_id={expected!r}, got {actual!r}."
+        )
+
+
+def assert_sessions_isolated(
+    master: MasterNode,
+    satellite: SatelliteNode,
+    declared_ids: List[str],
+) -> None:
+    """Assert that distinct declared session ids sent over ONE connection
+    each land on a distinct, isolated Layer-1 session.
+
+    HIVEMIND-BRIDGE-1 §4 (hivemind-core#287): a single connection may
+    multiplex several declared sessions — a relay forwarding several peers,
+    or a per-call bridge like baresip that mints a fresh session_id per
+    call. Each declared session MUST produce its own OVOS session, never
+    merge onto another, while still sharing the connection's nonce (they
+    are, after all, the same peer).
+
+    For each id in *declared_ids*, finds the bus_inject record whose
+    ``context.session.session_id`` ends with ``f":{declared_id}"`` and
+    checks:
+
+    - a record exists for every declared id (none went missing or collided
+      away);
+    - the resulting Layer-1 ids are pairwise distinct;
+    - they all share exactly one nonce prefix (same connection).
+
+    Args:
+        master:       The master node.
+        satellite:    The satellite that declared all of *declared_ids* over
+                      its single connection.
+        declared_ids: The distinct session_id values sent, in any order.
+    """
+    peer = satellite.peer
+    records = [
+        r for r in master.recorder.snapshot()
+        if r.direction == "bus_inject" and r.peer == peer
+    ]
+
+    layer1_by_declared: Dict[str, str] = {}
+    for declared in declared_ids:
+        suffix = f":{declared}"
+        match = next(
+            (r for r in records
+             if (((getattr(r.payload, "context", {}) or {}).get("session") or {})
+                 .get("session_id") or "").endswith(suffix)),
+            None,
+        )
+        if match is None:
+            raise AssertionError(
+                f"assert_sessions_isolated: no bus_inject record with a "
+                f"Layer-1 session_id ending in {suffix!r} (declared={declared!r}).\n"
+                f"All records from peer: {records}"
+            )
+        session = (getattr(match.payload, "context", {}) or {}).get("session") or {}
+        layer1_by_declared[declared] = session.get("session_id")
+
+    layer1_ids = list(layer1_by_declared.values())
+    if len(set(layer1_ids)) != len(declared_ids):
+        raise AssertionError(
+            "assert_sessions_isolated: declared session ids did not each "
+            f"produce a distinct Layer-1 id: {layer1_by_declared}"
+        )
+
+    prefixes = {sid.split(":", 1)[0] for sid in layer1_ids}
+    if len(prefixes) != 1:
+        raise AssertionError(
+            "assert_sessions_isolated: expected all declared sessions to "
+            f"share a single connection nonce prefix, got {prefixes}: "
+            f"{layer1_by_declared}"
+        )
+
+
+def assert_session_contents_merged_over_baseline(
+    master: MasterNode,
+    satellite: SatelliteNode,
+    expected_baseline: dict,
+) -> None:
+    """Assert a thin message keeps the HELLO-established session baseline.
+
+    HIVEMIND-BRIDGE-1 §4: a per-message session that omits a field (e.g. a
+    control message carrying only ``session_id``) is merged over the
+    connection's HELLO baseline, not replaced by a fresh session — the
+    baseline's ``location``/``lang``/etc. survive untouched. Building a
+    fresh ``Session`` for a thin message instead of merging would fabricate
+    the master's own defaults for the missing fields, silently overwriting
+    a satellite's real values (e.g. its timezone).
+
+    Checks that the last ``bus_inject`` record from *satellite* carries
+    every field in *expected_baseline* unchanged in ``context["session"]``.
+
+    Do not pass ``session_id`` here — it is NATted per connection, not a
+    preserved content field; use :func:`assert_session_id_natted` for it.
+
+    Args:
+        master:            The master node.
+        satellite:         The satellite whose last bus_inject is inspected.
+        expected_baseline: HELLO-time session fields (e.g. ``{"lang": ...,
+                           "location": ...}``) that a later thin message
+                           must still carry.
+    """
+    if "session_id" in expected_baseline:
+        raise ValueError(
+            "assert_session_contents_merged_over_baseline: 'session_id' is "
+            "NATted per connection, not a preserved content field — use "
+            "assert_session_id_natted() to check it."
+        )
+
+    peer = satellite.peer
+    records = [
+        r for r in master.recorder.snapshot()
+        if r.direction == "bus_inject" and r.peer == peer
+    ]
+    if not records:
+        raise AssertionError(
+            f"assert_session_contents_merged_over_baseline: no bus_inject "
+            f"records from peer={peer!r}.\nAll records: {master.recorder.snapshot()}"
+        )
+
+    msg = records[-1].payload
+    actual_session = (getattr(msg, "context", {}) or {}).get("session") or {}
+
+    errors: List[str] = []
+    for key, expected_val in expected_baseline.items():
+        actual_val = actual_session.get(key)
+        if actual_val != expected_val:
+            errors.append(
+                f"session.{key}: expected baseline value {expected_val!r}, "
+                f"got {actual_val!r} — the thin message clobbered the "
+                "baseline instead of merging over it"
+            )
+
+    if errors:
+        raise AssertionError(
+            "assert_session_contents_merged_over_baseline: BRIDGE-1 §4 "
+            "contents-merge failures:\n  " + "\n  ".join(errors)
         )
 
 
