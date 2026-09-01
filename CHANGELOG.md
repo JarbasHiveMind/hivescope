@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.0a1) (2026-09-01)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.7.2a1...0.8.0a1)
+
+**Merged pull requests:**
+
+- feat: NAT-aware session assertions for the shipped session model [\#61](https://github.com/JarbasHiveMind/hivescope/pull/61) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.7.2a1](https://github.com/JarbasHiveMind/hivescope/tree/0.7.2a1) (2026-08-15)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.7.1a2...0.7.2a1)
