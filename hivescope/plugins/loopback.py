@@ -336,7 +336,7 @@ class LoopbackNetworkProtocol(NetworkProtocol):
             """Queue a message for the async sender (called from sync protocol code)."""
             loop.call_soon_threadsafe(aqueue.put_nowait, ("message", payload))
 
-        def sync_disconnect():
+        def sync_disconnect(code: int = 1000, reason: str = ""):
             """Signal the async sender to close the WebSocket."""
             loop.call_soon_threadsafe(aqueue.put_nowait, ("disconnect", None))
 
