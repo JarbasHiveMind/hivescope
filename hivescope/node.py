@@ -425,7 +425,7 @@ class SatelliteNode:
         # Dispatch through the slave protocol's registered handlers
         self.shim.emitter.emit(message.msg_type, message)
 
-    def _on_disconnect(self):
+    def _on_disconnect(self, code: int = 1000, reason: str = ""):
         conn = self._connection
         master = self._master
         self._connection = None
