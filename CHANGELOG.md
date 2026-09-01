@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.1a1) (2026-09-01)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.0a1...0.8.1a1)
+
+**Merged pull requests:**
+
+- fix: accept an optional close code in disconnect callbacks [\#63](https://github.com/JarbasHiveMind/hivescope/pull/63) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.8.0a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.0a1) (2026-09-01)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.7.2a1...0.8.0a1)
