@@ -110,10 +110,13 @@ class TopologyBuilder:
             use_loopback: If True, use LoopbackNetworkProtocol (real WebSocket server on
                          localhost:0). If False (default), use TestNetworkProtocol (in-process
                          wiring). Set to True for testing real clients (MicroPython, JS, etc.).
-            **kwargs: Forwarded to :meth:`MasterNode.create` — ``require_crypto``,
-                     ``handshake_enabled``, ``agent_protocol``, ``db``. Any other
-                     keyword raises ``TypeError`` there, so a misspelled option
-                     fails loudly instead of silently misconfiguring the node.
+            **kwargs: Forwarded to :meth:`MasterNode.create` — ``agent_protocol``,
+                     ``db``. ``require_crypto`` and ``handshake_enabled`` are also
+                     accepted there but ignored (v3-Noise-only: the Noise handshake
+                     is mandatory and always encrypted), kept for caller
+                     compatibility. Any other keyword raises ``TypeError`` there,
+                     so a misspelled option fails loudly instead of silently
+                     misconfiguring the node.
 
         Returns:
             MasterNode. Access loopback URL via master.network_protocol.url after start_all().

@@ -7,6 +7,7 @@ HiveMindSlaveProtocol requires, without any WebSocket involvement.
 import json
 import logging
 import threading
+from collections import deque
 from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
@@ -63,6 +64,9 @@ class InProcessHiveShim:
         self.cipher: SupportedCiphers = SupportedCiphers.AES_GCM
         self.handshake_event = threading.Event()
         self._session_id: str = str(uuid4())
+        # HiveMindSlaveProtocol._should_use_noise() checks this against the
+        # server's advertised max_protocol_version to select the Noise path
+        self.max_protocol_version: int = 3
 
     # --- properties accessed by HiveMindSlaveProtocol ---
 
@@ -152,6 +156,10 @@ class MasterNode:
         must raise ``TypeError`` instead of being silently discarded, because
         a typo like ``requires_crypto=False`` would otherwise misconfigure the
         node and the test would still pass.
+
+        ``require_crypto`` and ``handshake_enabled`` are accepted-and-ignored
+        under v3-Noise-only — the Noise handshake is mandatory and always
+        encrypted; kept for caller compatibility.
         """
         identity = make_identity(name)
         # Default to the in-memory store; callers may inject a real
@@ -166,8 +174,6 @@ class MasterNode:
             db=db,
             agent_protocol=agent,
             binary_data_protocol=binary,
-            require_crypto=require_crypto,
-            handshake_enabled=handshake_enabled,
             peer=f"{name}:0.0.0.0",
         )
         # Use LoopbackNetworkProtocol (real WebSocket) if use_loopback=True,
@@ -283,6 +289,17 @@ class SatelliteNode:
         self._connection: Optional[HiveMindClientConnection] = None
         self._master: Optional[MasterNode] = None
 
+        # Master and satellite call each other synchronously in both
+        # directions (send() -> master.handle_message(), _receive_raw() ->
+        # shim.emitter.emit()). A real socket never re-enters a handler that
+        # is still on the stack; here a handler's own outbound send can wake
+        # a chain that lands right back on it while it's still running,
+        # mutating state it is about to read (HIVEMIND-CRYPTO-1 handshake
+        # frames included). Route both directions through one queue so a
+        # frame is delivered only after the one before it has fully returned.
+        self._dispatch_queue: "deque" = deque()
+        self._dispatching = False
+
     @classmethod
     def create(cls, name: str, site_id: Optional[str] = None,
                shared_bus: bool = False,
@@ -358,7 +375,7 @@ class SatelliteNode:
             raise RuntimeError(
                 f"Handshake did not complete for satellite {self.name!r}. "
                 "Ensure the satellite has a password set (password-based handshake) "
-                "or that the master has handshake_enabled=True (RSA handshake)."
+                "or that it is a v3-capable client (Noise handshake is always on)."
             )
 
     def wait_for_handshake(self, timeout: float = 5.0) -> bool:
@@ -396,7 +413,7 @@ class SatelliteNode:
                 f"Satellite {self.name!r} is not connected to any master."
             )
         self.recorder.record("out", message.msg_type, message._payload, "master")
-        self._master.hm_protocol.handle_message(message, self._connection)
+        self._dispatch(lambda: self._master.hm_protocol.handle_message(message, self._connection))
 
     # --- receiving (called by master's send_msg) ---
 
@@ -409,21 +426,50 @@ class SatelliteNode:
             # Connection not yet established (shouldn't normally happen)
             return
 
+        peer = self._connection.peer
+
+        # self._connection is the master's HiveMindClientConnection, shared
+        # in-process for framing/session bookkeeping; it carries the master's
+        # own Noise transport (the responder's cipher states), not the
+        # satellite's (the initiator's). Decrypting a v3 session with the
+        # wrong side's transport always fails AEAD authentication, so decode
+        # borrows the satellite's own transport for the duration of the call.
+        client_transport = getattr(self.shim, "noise_transport", None)
+        saved_transport = self._connection.noise_transport
+        if client_transport is not None:
+            self._connection.noise_transport = client_transport
         try:
             message = self._connection.decode(payload)
         except Exception as exc:
             log.exception("[%s] _receive_raw decode error: %s", self.name, exc)
             # Record the failure so a test waiting on a message fails fast with
             # the decode error in the record list instead of on timeout.
-            self.recorder.record("in", "_decode_error", {"error": str(exc)},
-                                 self._connection.peer)
+            self.recorder.record("in", "_decode_error", {"error": str(exc)}, peer)
             return
+        finally:
+            self._connection.noise_transport = saved_transport
 
-        self.recorder.record("in", message.msg_type, message._payload,
-                             self._connection.peer if self._connection else "master")
+        self.recorder.record("in", message.msg_type, message._payload, peer)
 
         # Dispatch through the slave protocol's registered handlers
-        self.shim.emitter.emit(message.msg_type, message)
+        self._dispatch(lambda: self.shim.emitter.emit(message.msg_type, message))
+
+    def _dispatch(self, action):
+        """Run `action` after every already-in-flight frame has returned.
+
+        Both send() and _receive_raw() funnel through here so a frame
+        triggered synchronously from inside another frame's handler queues
+        up instead of re-entering that handler mid-execution.
+        """
+        self._dispatch_queue.append(action)
+        if self._dispatching:
+            return  # an outer _dispatch() call will drain this one
+        self._dispatching = True
+        try:
+            while self._dispatch_queue:
+                self._dispatch_queue.popleft()()
+        finally:
+            self._dispatching = False
 
     def _on_disconnect(self, code: int = 1000, reason: str = ""):
         conn = self._connection

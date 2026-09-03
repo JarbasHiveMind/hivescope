@@ -303,9 +303,12 @@ def test_master_create_rejects_unknown_keywords():
 
 
 def test_master_create_still_accepts_the_documented_keywords():
+    """require_crypto/handshake_enabled are accepted-and-ignored under
+    v3-Noise-only (core no longer has these knobs; the Noise handshake is
+    mandatory and always encrypted) — kept for caller compatibility."""
     m = MasterNode.create("M0", require_crypto=False, handshake_enabled=False)
     try:
-        assert m.hm_protocol.require_crypto is False
+        assert m.hm_protocol is not None
     finally:
         m.cleanup()
 
@@ -453,32 +456,43 @@ def test_topology_plot_merges_only_real_relays(tmp_path):
 
 # ── loopback lifecycle ───────────────────────────────────────────────────────
 
-def _ws_client(url: str, name: str, key: str, session_id: str,
+def _ws_client(url: str, name: str, key: str, password: str,
                connected: threading.Event, close: threading.Event):
-    """Minimal raw client: connect, announce a HELLO, then idle.
+    """Real v3 client: connect, complete the Noise handshake (which sends
+    the encrypted HELLO that makes hivemind-core register the peer in
+    ``handle_hello_message``), then idle until told to close.
 
-    The HELLO is what makes hivemind-core register the peer
-    (``handle_hello_message``), so without it there is no peer to go ghost.
+    hivemind-core is v3-Noise-only (no legacy fallback, HiveMind-core#309):
+    a client that never offers a Noise handshake is rejected before HELLO
+    is even reachable, so this must be a real handshake, not a bare HELLO.
     """
-    import json
+    from hivemind_bus_client.async_client import AsyncHiveMessageBusClient
+    from hivemind_bus_client.identity import NodeIdentity
 
-    import websockets
+    host_port = url.split("://", 1)[1]
+    host, port = host_port.split(":")
+    port = int(port.split("/")[0])
+
+    identity = NodeIdentity()
+    identity.access_key = key
+    identity.password = password
+    identity.default_master = f"ws://{host}"
+    identity.default_port = port
 
     async def _run():
-        auth = base64.b64encode(f"{name}:{key}".encode()).decode()
-        async with websockets.connect(
-                url, additional_headers={"Authorization": f"Basic {auth}"}) as ws:
-            await ws.send(json.dumps({
-                "msg_type": "hello",
-                "payload": {"session": {"session_id": session_id},
-                            "site_id": "test-site"},
-            }))
+        client = AsyncHiveMessageBusClient(
+            key=key, password=password, host=f"ws://{host}", port=port,
+            identity=identity, max_protocol_version=3, useragent=name)
+        try:
+            await asyncio.wait_for(client.connect(handshake_max_retries=3), timeout=15)
             connected.set()
             while not close.is_set():
-                try:
-                    await asyncio.wait_for(ws.recv(), timeout=0.1)
-                except Exception:
-                    pass
+                await asyncio.sleep(0.1)
+        finally:
+            try:
+                await client.close()
+            except Exception:
+                pass
 
     try:
         asyncio.run(_run())
@@ -492,14 +506,14 @@ def test_loopback_stop_runs_client_cleanup_and_leaves_no_ghost_peers():
     b = TopologyBuilder()
     m = b.add_master("M0", use_loopback=True, require_crypto=False,
                      handshake_enabled=False)
-    m.register_satellite(key="ghost-key")
+    m.register_satellite(key="ghost-key", password="x9K#mQ7z!vL2pR8w$nT4jY6c-ghost")
     b.start_all()
     url = m.network_protocol.url
 
     connected, close = threading.Event(), threading.Event()
     t = threading.Thread(
         target=_ws_client,
-        args=(url, "ghost", "ghost-key", "ghost-session", connected, close),
+        args=(url, "ghost", "ghost-key", "x9K#mQ7z!vL2pR8w$nT4jY6c-ghost", connected, close),
         daemon=True)
     t.start()
     assert connected.wait(timeout=20), "websocket client never connected"
