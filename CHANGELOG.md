@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.2a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.2a1) (2026-09-03)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.1a1...0.8.2a1)
+
+**Merged pull requests:**
+
+- fix: v3-Noise-only compat — stop forwarding removed core kwargs \(companion to hivemind-core \#309\) [\#65](https://github.com/JarbasHiveMind/hivescope/pull/65) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.8.1a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.1a1) (2026-09-01)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.0a1...0.8.1a1)
