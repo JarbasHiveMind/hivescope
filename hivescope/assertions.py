@@ -181,7 +181,7 @@ def assert_handshake_complete(
     """Assert that *satellite* has completed its handshake with *master*.
 
     Checks:
-    - ``satellite.shim.crypto_key`` is not None (crypto negotiated)
+    - ``satellite.shim.noise_transport`` is set (v3 Noise session negotiated)
     - ``satellite.shim.handshake_event`` is set
     - master's ``connected_peers()`` includes this satellite
     """
@@ -191,8 +191,11 @@ def assert_handshake_complete(
     # the handshake on the server thread, so the check must not be instant.
     satellite.shim.handshake_event.wait(timeout=timeout)
 
-    if satellite.shim.crypto_key is None:
-        errors.append("satellite.shim.crypto_key is None (no crypto negotiated)")
+    # hivemind-core is v3-Noise-only (no legacy fallback, HiveMind-core#309):
+    # negotiated crypto lives in the shim's Noise transport, never in the
+    # removed shim.crypto_key.
+    if getattr(satellite.shim, "noise_transport", None) is None:
+        errors.append("satellite.shim.noise_transport is None (no Noise session negotiated)")
 
     if not satellite.shim.handshake_event.is_set():
         errors.append(
@@ -1279,9 +1282,12 @@ def assert_session_id_natted(
         if conn is None:
             raise AssertionError(
                 f"assert_session_id_natted: peer {peer!r} is not (or no longer) "
-                "connected at master — cannot read its conn_nonce."
+                "connected at master — cannot read its session_namespace."
             )
-        expected = f"{conn.conn_nonce}:{declared_id}"
+        # HIVEMIND-BRIDGE-1 §4 NAT token is the durable, identity-scoped
+        # session_namespace (core #299/#306), not the per-connection
+        # conn_nonce that used to back this before those changes.
+        expected = f"{conn.session_namespace}:{declared_id}"
 
     if actual != expected:
         raise AssertionError(

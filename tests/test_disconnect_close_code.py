@@ -47,31 +47,44 @@ def test_network_disconnect_callback_still_works_with_no_args():
 def test_loopback_disconnect_callback_accepts_close_code():
     """LoopbackNetworkProtocol wires a sync_disconnect() closure as the
     disconnect callback; it must tolerate being called with (code, reason)."""
-    import base64
-    import json
     import threading
     import time
 
     import asyncio
 
-    def _ws_client(url, name, key, session_id, connected, close):
-        import websockets
+    def _ws_client(url, name, key, password, connected, close):
+        """Real v3 client: a bare HELLO is not reachable any more
+        (hivemind-core is v3-Noise-only, HiveMind-core#309), so this client
+        completes a genuine Noise handshake to get registered at master
+        before the test grabs its connection and disconnects it with a
+        close code -- the actual subject under test."""
+        from hivemind_bus_client.async_client import AsyncHiveMessageBusClient
+        from hivemind_bus_client.identity import NodeIdentity
+
+        host_port = url.split("://", 1)[1]
+        host, port = host_port.split(":")
+        port = int(port.split("/")[0])
+
+        identity = NodeIdentity()
+        identity.access_key = key
+        identity.password = password
+        identity.default_master = f"ws://{host}"
+        identity.default_port = port
 
         async def _run():
-            auth = base64.b64encode(f"{name}:{key}".encode()).decode()
-            async with websockets.connect(
-                    url, additional_headers={"Authorization": f"Basic {auth}"}) as ws:
-                await ws.send(json.dumps({
-                    "msg_type": "hello",
-                    "payload": {"session": {"session_id": session_id},
-                                "site_id": "test-site"},
-                }))
+            client = AsyncHiveMessageBusClient(
+                key=key, password=password, host=f"ws://{host}", port=port,
+                identity=identity, max_protocol_version=3, useragent=name)
+            try:
+                await asyncio.wait_for(client.connect(handshake_max_retries=3), timeout=15)
                 connected.set()
                 while not close.is_set():
-                    try:
-                        await asyncio.wait_for(ws.recv(), timeout=0.1)
-                    except Exception:
-                        pass
+                    await asyncio.sleep(0.1)
+            finally:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
 
         try:
             asyncio.run(_run())
@@ -81,15 +94,16 @@ def test_loopback_disconnect_callback_accepts_close_code():
     b = TopologyBuilder()
     m = b.add_master("M0", use_loopback=True, require_crypto=False,
                      handshake_enabled=False)
-    m.register_satellite(key="close-code-key")
+    m.register_satellite(key="close-code-key",
+                         password="x9K#mQ7z!vL2pR8w$nT4jY6c-close")
     b.start_all()
     url = m.network_protocol.url
 
     connected, close = threading.Event(), threading.Event()
     t = threading.Thread(
         target=_ws_client,
-        args=(url, "close-code-node", "close-code-key", "cc-session",
-              connected, close),
+        args=(url, "close-code-node", "close-code-key",
+              "x9K#mQ7z!vL2pR8w$nT4jY6c-close", connected, close),
         daemon=True)
     t.start()
     try:

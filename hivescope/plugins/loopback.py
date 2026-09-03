@@ -337,23 +337,25 @@ class LoopbackNetworkProtocol(NetworkProtocol):
             loop.call_soon_threadsafe(aqueue.put_nowait, ("message", payload))
 
         def sync_disconnect(code: int = 1000, reason: str = ""):
-            """Signal the async sender to close the WebSocket."""
-            loop.call_soon_threadsafe(aqueue.put_nowait, ("disconnect", None))
+            """Signal the async sender to close the WebSocket with this code/reason."""
+            loop.call_soon_threadsafe(aqueue.put_nowait, ("disconnect", (code, reason)))
 
         async def message_sender():
             """Async task: reads from queue and sends to WebSocket."""
+            close_code, close_reason = 1000, ""
             try:
                 while True:
                     msg_type, payload = await aqueue.get()
                     if msg_type == "message":
                         await websocket.send(payload)
                     elif msg_type == "disconnect":
+                        close_code, close_reason = payload
                         break
             except Exception as e:
                 _LOG.exception(f"Message sender error for {name}: {e}")
             finally:
                 try:
-                    await websocket.close()
+                    await websocket.close(close_code, close_reason)
                 except Exception:
                     pass
 
@@ -366,7 +368,9 @@ class LoopbackNetworkProtocol(NetworkProtocol):
             sess=Session(session_id="default"),  # Re-assigned after HELLO from satellite
             hm_protocol=self.hm_protocol,
             # Populate from DB entry
-            crypto_key=db_client.crypto_key,
+            # crypto_key is no longer a HiveMindClientConnection field under
+            # v3-Noise-only — the Noise handshake is the sole transport-crypto
+            # layer, so a pre-shared crypto_key is never forwarded to core.
             pswd_handshake=(PasswordHandShake(db_client.password)
                             if db_client.password else None),
             is_admin=db_client.is_admin,
@@ -419,7 +423,7 @@ class LoopbackNetworkProtocol(NetworkProtocol):
             _LOG.exception(f"Error handling client {name}: {e}")
         finally:
             # Signal the sender task to stop and wait
-            aqueue.put_nowait(("disconnect", None))
+            aqueue.put_nowait(("disconnect", (1000, "")))
             try:
                 if not sender_task.done():
                     await asyncio.wait_for(sender_task, timeout=2)
