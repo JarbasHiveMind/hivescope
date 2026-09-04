@@ -39,7 +39,6 @@ class InMemoryClientDatabase:
                    skill_blacklist: Optional[List[str]] = None,
                    message_blacklist: Optional[List[str]] = None,
                    allowed_types: Optional[List[str]] = None,
-                   crypto_key: Optional[str] = None,
                    password: Optional[str] = None,
                    can_escalate: bool = True,
                    can_propagate: bool = True,
@@ -48,24 +47,20 @@ class InMemoryClientDatabase:
 
         Field semantics on update (they match hivemind-core's ClientDatabase):
 
-        - ``crypto_key`` is truncated to the first 16 characters, because the
-          wire cipher uses a 16-byte key.
-        - An empty ``crypto_key`` or ``password`` is IGNORED, not cleared. Use
-          :meth:`update_item` with an explicit ``Client`` to clear either field.
+        - An empty ``password`` is IGNORED, not cleared. Use
+          :meth:`update_item` with an explicit ``Client`` to clear it.
         - ``allowed_types`` is overwritten whenever it is not ``None``, so
           passing ``[]`` really does revoke a previous whitelist.
         """
-        if crypto_key is not None:
-            crypto_key = crypto_key[:16]
         with self._lock:
             return self._add_client_locked(
                 name, key, admin, intent_blacklist, skill_blacklist,
-                message_blacklist, allowed_types, crypto_key, password,
+                message_blacklist, allowed_types, password,
                 can_escalate, can_propagate, can_broadcast)
 
     def _add_client_locked(self, name, key, admin, intent_blacklist,
                            skill_blacklist, message_blacklist, allowed_types,
-                           crypto_key, password, can_escalate, can_propagate,
+                           password, can_escalate, can_propagate,
                            can_broadcast) -> bool:
         existing = self.get_client_by_api_key(key)
         if existing:
@@ -86,8 +81,6 @@ class InMemoryClientDatabase:
             if allowed_types is not None:
                 existing.allowed_types = allowed_types
             existing.is_admin = admin
-            if crypto_key:
-                existing.crypto_key = crypto_key
             if password:
                 existing.password = password
             existing.can_escalate = can_escalate
@@ -112,7 +105,6 @@ class InMemoryClientDatabase:
             client_id=self._next_id,
             is_admin=admin,
             allowed_types=allowed_types or [],
-            crypto_key=crypto_key,
             password=password,
             can_escalate=can_escalate,
             can_propagate=can_propagate,

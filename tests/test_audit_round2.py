@@ -594,26 +594,18 @@ def test_loopback_keeps_the_thread_reference_when_the_join_fails():
 # F. Test-suite gaps
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_crypto_key_is_truncated_to_sixteen_characters():
+def test_empty_password_on_update_is_ignored_not_cleared():
+    """Documented in add_client: a falsy password leaves the stored value
+    alone. update_item is the way to clear it."""
     db = InMemoryClientDatabase()
-    db.add_client(name="sat", key="k", crypto_key="0123456789abcdefEXTRA")
-    assert db.get_client_by_api_key("k").crypto_key == "0123456789abcdef"
-
-
-def test_empty_crypto_key_on_update_is_ignored_not_cleared():
-    """Documented in add_client: falsy crypto_key/password leave the stored
-    value alone. update_item is the way to clear one."""
-    db = InMemoryClientDatabase()
-    db.add_client(name="sat", key="k", crypto_key="0123456789abcdef",
-                  password="pw")
-    db.add_client(name="sat", key="k", crypto_key="", password="")
+    db.add_client(name="sat", key="k", password="pw")
+    db.add_client(name="sat", key="k", password="")
     client = db.get_client_by_api_key("k")
-    assert client.crypto_key == "0123456789abcdef"
     assert client.password == "pw"
 
-    client.crypto_key = None
+    client.password = None
     db.update_item(client)
-    assert db.get_client_by_api_key("k").crypto_key is None
+    assert db.get_client_by_api_key("k").password is None
 
 
 def test_re_registration_with_empty_allowed_types_revokes_the_whitelist():
