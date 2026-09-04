@@ -37,6 +37,67 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Non-reentrant in-process delivery pump
+# ---------------------------------------------------------------------------
+#
+# A real WebSocket write returns before the peer reads the frame: delivery is
+# asynchronous, so a handler that sends never runs inside the sender's own call
+# stack. The in-process shim has no socket — a "send" reaches the peer by
+# calling straight into its receive path — so without care a handler's outbound
+# send re-enters the very send that is still on the stack.
+#
+# hivemind-bus-client's ``NoiseTransport.send_message`` holds a single,
+# non-reentrant ``_send_lock`` across the whole wire-send (encrypt + every
+# raw_send chunk) so a message's frames stay contiguous and its Noise nonces
+# stay ordered. If a send re-enters ``send_message`` on the same transport from
+# the same thread — a master relaying a frame down to a peer whose handler then
+# sends back on that connection (``_relay_downstream`` -> ``conn.send``) — the
+# second acquire blocks on a lock the thread already holds. Deadlock.
+#
+# The cure is to model the socket: a delivery started while another delivery is
+# in progress on this thread is queued and runs only after the outer one has
+# fully returned and released ``_send_lock``. Every top-level entry point — a
+# satellite's ``send()``/``connect()`` handshake and a master's
+# ``send_to_satellite``/``send_to_all``/``emit_on_bus`` — funnels its work
+# through :func:`_deliver`, which roots the pump OUTSIDE any ``send_message``.
+# ``_receive_raw`` (the only thing hivemind-core's ``raw_send`` calls, always
+# from inside a ``send_message``) therefore always finds the pump already
+# draining and merely enqueues, so the wire-send returns and the lock is free
+# before the peer's handler runs. The queue is FIFO and drained in order, so
+# the frames of one message — and messages relative to one another — arrive in
+# the order they were sent, as Noise's in-order transport requires.
+#
+# The pump is thread-local: all in-process traffic runs on the caller's thread,
+# and a per-thread queue keeps two threads driving separate topologies from
+# sharing state.
+
+_pump = threading.local()
+
+
+def _deliver(action) -> None:
+    """Run ``action`` once every delivery already in flight on this thread has
+    returned.
+
+    The first call on the thread drains the queue to completion; a call made
+    while that drain is running only appends, so no delivery ever executes
+    inside another delivery's ``send_message`` (and thus never re-enters its
+    ``_send_lock``). Order is preserved: actions run in the order enqueued.
+    """
+    queue = getattr(_pump, "queue", None)
+    if queue is None:
+        queue = _pump.queue = deque()
+    queue.append(action)
+    if getattr(_pump, "draining", False):
+        return
+    _pump.draining = True
+    try:
+        while queue:
+            queue.popleft()()
+    finally:
+        _pump.draining = False
+
+
+# ---------------------------------------------------------------------------
 # InProcessHiveShim
 # ---------------------------------------------------------------------------
 
@@ -233,16 +294,21 @@ class MasterNode:
                 f"No connected client with peer '{peer}'. "
                 f"Connected peers: {list(self.hm_protocol.clients)}"
             )
-        conn.send(message)
+        # Root the delivery pump here, outside conn.send's send_message, so a
+        # peer handler woken by this frame enqueues its own sends instead of
+        # re-entering the transport's _send_lock (relay fan-out deadlock).
+        _deliver(lambda: conn.send(message))
 
     def send_to_all(self, message: HiveMessage):
         """Broadcast a HiveMessage to all currently connected satellites."""
-        for peer, conn in list(self.hm_protocol.clients.items()):
-            conn.send(message)
+        def _broadcast():
+            for peer, conn in list(self.hm_protocol.clients.items()):
+                conn.send(message)
+        _deliver(_broadcast)
 
     def emit_on_bus(self, message: Message):
         """Emit an OVOS message on the internal agent bus (simulates a skill response)."""
-        self.agent_protocol.bus.emit(message)
+        _deliver(lambda: self.agent_protocol.bus.emit(message))
 
     # --- waiting / assertion ---
 
@@ -288,17 +354,6 @@ class SatelliteNode:
         # Set by connect()
         self._connection: Optional[HiveMindClientConnection] = None
         self._master: Optional[MasterNode] = None
-
-        # Master and satellite call each other synchronously in both
-        # directions (send() -> master.handle_message(), _receive_raw() ->
-        # shim.emitter.emit()). A real socket never re-enters a handler that
-        # is still on the stack; here a handler's own outbound send can wake
-        # a chain that lands right back on it while it's still running,
-        # mutating state it is about to read (HIVEMIND-CRYPTO-1 handshake
-        # frames included). Route both directions through one queue so a
-        # frame is delivered only after the one before it has fully returned.
-        self._dispatch_queue: "deque" = deque()
-        self._dispatching = False
 
     @classmethod
     def create(cls, name: str, site_id: Optional[str] = None,
@@ -363,13 +418,15 @@ class SatelliteNode:
         )
 
         # connect_satellite sets self._connection and calls handle_new_client;
-        # the password handshake completes synchronously inside that call.
-        master.network_protocol.connect_satellite(satellite=self)
+        # the handshake completes synchronously inside that call. Route it
+        # through the delivery pump so it roots outside any send_message, the
+        # same as every other traffic-generating entry point.
+        _deliver(lambda: master.network_protocol.connect_satellite(satellite=self))
 
         # For RSA-only mode (no password), slave never calls start_handshake
         # automatically — do it here as the real client would via wait_for_handshake.
         if not self.shim.handshake_event.is_set():
-            self.slave_protocol.start_handshake()
+            _deliver(self.slave_protocol.start_handshake)
 
         if not self.shim.handshake_event.is_set():
             raise RuntimeError(
@@ -413,7 +470,7 @@ class SatelliteNode:
                 f"Satellite {self.name!r} is not connected to any master."
             )
         self.recorder.record("out", message.msg_type, message._payload, "master")
-        self._dispatch(lambda: self._master.hm_protocol.handle_message(message, self._connection))
+        _deliver(lambda: self._master.hm_protocol.handle_message(message, self._connection))
 
     # --- receiving (called by master's send_msg) ---
 
@@ -451,25 +508,12 @@ class SatelliteNode:
 
         self.recorder.record("in", message.msg_type, message._payload, peer)
 
-        # Dispatch through the slave protocol's registered handlers
-        self._dispatch(lambda: self.shim.emitter.emit(message.msg_type, message))
-
-    def _dispatch(self, action):
-        """Run `action` after every already-in-flight frame has returned.
-
-        Both send() and _receive_raw() funnel through here so a frame
-        triggered synchronously from inside another frame's handler queues
-        up instead of re-entering that handler mid-execution.
-        """
-        self._dispatch_queue.append(action)
-        if self._dispatching:
-            return  # an outer _dispatch() call will drain this one
-        self._dispatching = True
-        try:
-            while self._dispatch_queue:
-                self._dispatch_queue.popleft()()
-        finally:
-            self._dispatching = False
+        # Dispatch through the slave protocol's registered handlers. raw_send
+        # reaches here from inside NoiseTransport.send_message, so this must not
+        # run a handler synchronously (the handler's own outbound send would
+        # re-enter the held _send_lock); _deliver enqueues it behind the send
+        # in progress and it runs once that send has returned.
+        _deliver(lambda: self.shim.emitter.emit(message.msg_type, message))
 
     def _on_disconnect(self, code: int = 1000, reason: str = ""):
         conn = self._connection
