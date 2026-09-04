@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.4a2](https://github.com/JarbasHiveMind/hivescope/tree/0.8.4a2) (2026-09-04)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.4a1...0.8.4a2)
+
+**Merged pull requests:**
+
+- refactor: drop the dead crypto\_key from InMemoryClientDatabase [\#71](https://github.com/JarbasHiveMind/hivescope/pull/71) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.8.4a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.4a1) (2026-09-04)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.3a1...0.8.4a1)
