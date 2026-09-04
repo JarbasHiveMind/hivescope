@@ -29,7 +29,7 @@ dependencies = [
     # line here (incl. ovos-bus-client, whose 2.x is prerelease-only — a direct
     # prerelease specifier is needed to enable it) lets consumers get the right
     # stack from just `hivescope>=0.5.1a1`.
-    "hivemind-core>=4.6.2a1,<5.0.0",
+    "hivemind-core>=4.6.2a1,<6.0.0",
     "ovos-bus-client>=2.0.0a3,<3.0.0",
     "ovos-utils>=0.0.40",
     "pytest>=7.4",
