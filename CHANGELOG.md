@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.4a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.4a1) (2026-09-04)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.3a1...0.8.4a1)
+
+**Merged pull requests:**
+
+- fix: deliver in-process shim messages non-reentrantly so a send cannot re-enter the Noise send lock [\#69](https://github.com/JarbasHiveMind/hivescope/pull/69) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.8.3a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.3a1) (2026-09-04)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.2a1...0.8.3a1)
