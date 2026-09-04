@@ -266,8 +266,7 @@ class MasterNode:
                            allowed_types: Optional[List[str]] = None,
                            msg_blacklist: Optional[List[str]] = None,
                            skill_blacklist: Optional[List[str]] = None,
-                           intent_blacklist: Optional[List[str]] = None,
-                           crypto_key: Optional[str] = None):
+                           intent_blacklist: Optional[List[str]] = None):
         """Pre-populate the DB so a satellite with this key can connect."""
         self.db.add_client(
             name="test-satellite",
@@ -281,7 +280,6 @@ class MasterNode:
             message_blacklist=msg_blacklist,
             skill_blacklist=skill_blacklist,
             intent_blacklist=intent_blacklist,
-            crypto_key=crypto_key,
         )
 
     # --- sending to connected satellites ---
