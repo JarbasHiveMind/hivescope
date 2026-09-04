@@ -42,6 +42,8 @@ Usage::
 import time
 from typing import Any, Dict, List, Optional
 
+from ovos_bus_client.session import Session
+
 from hivescope.node import MasterNode, SatelliteNode
 from hivemind_bus_client.message import HiveMessageType
 
@@ -1366,6 +1368,25 @@ def assert_sessions_isolated(
         )
 
 
+def _location_signature(location: Optional[Dict[str, Any]]) -> tuple:
+    """Canonical ``(lat, lon, tz)`` signature for a session ``location`` value.
+
+    OVOS-SESSION-1 §3.5 made ``Session.location`` a flat ``{lat, lon, tz}``
+    wire shape; older ovos-bus-client releases emit the legacy nested
+    mycroft.conf shape (``city``/``coordinate``/``timezone``) instead. Read
+    both through the ``Session`` API so a baseline location compares equal
+    across either wire shape — the value is what must survive, not its
+    on-the-wire layout.
+    """
+    sess = Session(location_prefs=location or {})
+    loc = getattr(sess, "location", None)
+    if isinstance(loc, dict):
+        return (loc.get("lat"), loc.get("lon"), sess.timezone)
+    prefs = sess.location_preferences or {}
+    coordinate = prefs.get("coordinate", {}) or {}
+    return (coordinate.get("latitude"), coordinate.get("longitude"), sess.timezone)
+
+
 def assert_session_contents_merged_over_baseline(
     master: MasterNode,
     satellite: SatelliteNode,
@@ -1418,6 +1439,18 @@ def assert_session_contents_merged_over_baseline(
     errors: List[str] = []
     for key, expected_val in expected_baseline.items():
         actual_val = actual_session.get(key)
+        if key == "location":
+            # Compare via the Session API (see _location_signature) rather
+            # than the raw wire dict: OVOS-SESSION-1 §3.5 lets ``location``
+            # travel as either the flat {lat, lon, tz} shape or the legacy
+            # nested one, and both must be accepted as "unchanged".
+            if _location_signature(actual_val) != _location_signature(expected_val):
+                errors.append(
+                    f"session.{key}: expected baseline value {expected_val!r}, "
+                    f"got {actual_val!r} — the thin message clobbered the "
+                    "baseline instead of merging over it"
+                )
+            continue
         if actual_val != expected_val:
             errors.append(
                 f"session.{key}: expected baseline value {expected_val!r}, "
