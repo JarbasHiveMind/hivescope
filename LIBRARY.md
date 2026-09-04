@@ -3,14 +3,14 @@
 Consumer install:
 
 ```bash
-pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@master"
+pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@dev"
 ```
 
 ---
 
 ## Protocol-matrix coverage
 
-14 `HiveMessageType` values, each with an assertion helper and a copy-paste template.
+13 `HiveMessageType` values, each with an assertion helper and a copy-paste template.
 
 | Message type | Value | Assertion helper | Template | Status |
 |---|---|---|---|---|
@@ -23,15 +23,18 @@ pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@master"
 | ESCALATE | `escalate` | `assert_escalate_delivered` | `test_template_routing.py` | **ready** |
 | INTERCOM | `intercom` | `assert_intercom_delivered` | `test_template_routing.py` | **ready** |
 | BINARY | `bin` | `assert_binary_delivered` | `test_template_binary.py` | **ready** |
-| QUERY | `query` | `assert_query_routed` | `test_template_query.py` | **pending** — [core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88) |
-| CASCADE | `cascade` | `assert_cascade_routed` | `test_template_cascade.py` | **pending** — [core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) / [ws#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88) |
-| PING | `ping` | `assert_ping_responded` | `test_template_ping.py` | **pending (partial)** — [core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) |
+| QUERY | `query` | `assert_query_routed` | `test_template_query.py` | **ready** — the inner payload must be a `HiveMessage`, not a bare `Message` |
+| CASCADE | `cascade` | `assert_cascade_routed` | `test_template_cascade.py` | **ready** — the inner payload must be a `HiveMessage`, not a bare `Message` |
+| PING | `ping` | `assert_ping_responded` | `test_template_ping.py` | **ready** — send `PROPAGATE(PING)`; a bare PING is not routed |
 | RENDEZVOUS | `rendezvous` | `assert_rendezvous_handled` | `test_template_rendezvous.py` | **pending** — [ws#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103) |
-| THIRDPRTY | `3rdparty` | `assert_thirdparty_passed` | `test_template_thirdparty.py` | **verify** — passthrough; routing status TBD |
 
-Pending tests are decorated `@pytest.mark.xfail(strict=False)` — they will show
-as `xfail` (expected failures) rather than errors. When the referenced PR lands,
-remove the `xfail` marker and implement the response-assertion.
+Generic (any unhandled/user-land type): `assert_passthrough_message_delivered(node, message_type, ...)` —
+`test_template_passthrough.py`. Asserts the payload traverses the mesh untouched;
+takes the `HiveMessageType` as an argument instead of being bound to one type.
+
+Pending tests are decorated `@pytest.mark.xfail(strict=False)`. They show as
+`xfail` (expected failures) rather than errors. When the type gets a handler in
+hivemind-core, remove the `xfail` marker and add the response assertion.
 
 ---
 
@@ -42,7 +45,7 @@ remove the `xfail` marker and implement the response-assertion.
 ### 1. Install hivescope
 
 ```bash
-pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@master"
+pip install "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@dev"
 ```
 
 Or add to your `pyproject.toml` test deps:
@@ -50,7 +53,7 @@ Or add to your `pyproject.toml` test deps:
 ```toml
 [project.optional-dependencies]
 test = [
-    "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@master",
+    "hivescope @ git+https://github.com/JarbasHiveMind/hivescope@dev",
     "pytest>=7.4",
 ]
 ```
@@ -137,6 +140,7 @@ from hivescope import (
     assert_bus_message_routed, assert_hello_received,
     assert_broadcast_delivered, assert_broadcast_blocked,
     assert_propagate_delivered, assert_escalate_delivered,
+    assert_intercom_delivered, assert_shared_bus_received,
     assert_binary_delivered,
     # Scenario builders
     single_satellite, admin_satellite, three_satellites,
@@ -145,13 +149,13 @@ from hivescope import (
 )
 ```
 
-Type-specific pending helpers live in `hivescope.assertions`:
+These type-specific helpers live in `hivescope.assertions` and are not re-exported at
+top level. Import them directly:
 
 ```python
 from hivescope.assertions import (
-    assert_intercom_delivered, assert_shared_bus_received,
     assert_query_routed, assert_cascade_routed,
-    assert_ping_responded, assert_rendezvous_handled, assert_thirdparty_passed,
+    assert_ping_responded, assert_rendezvous_handled, assert_passthrough_message_delivered,
 )
 ```
 
@@ -164,11 +168,10 @@ pytest_plugins = ['hivescope.pytest_fixtures']
 
 ---
 
-## Pending cells — what to do when PRs land
+## Pending cells — what to do when support lands
 
-| PR | Type | Action |
+| Type | Blocker | Action when it lands |
 |---|---|---|
-| [hivemind-core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) | QUERY, CASCADE, PING | Remove `xfail` in templates + tests; implement response assertions |
+| [hivemind-core#74](https://github.com/JarbasHiveMind/HiveMind-core/pull/74) | QUERY, CASCADE | Remove `xfail` in templates + tests; implement response assertions |
 | [hivemind-websocket-client#88](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88) | QUERY, CASCADE | Remove `xfail` in templates + tests |
 | [hivemind-websocket-client#103](https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/103) | RENDEZVOUS | Remove `xfail`; add rendezvous-node fixture to topology |
-| THIRDPRTY verify | THIRDPRTY | Run test; if passes, remove xfail; if not routed, add xfail with issue ref |

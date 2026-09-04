@@ -30,8 +30,18 @@ class MessageRecorder:
 
     @property
     def messages(self) -> List[RecordedMessage]:
-        """Alias for ``records`` — preferred name in assertion helpers and templates."""
-        return self.records
+        """Snapshot alias for ``records`` — preferred in assertion helpers."""
+        return self.snapshot()
+
+    def snapshot(self) -> List[RecordedMessage]:
+        """Return a copy of the records, taken under the lock.
+
+        Iterate over this instead of ``records`` — another thread (the
+        loopback event loop) can append while a caller iterates, which makes
+        a plain iteration raise ``RuntimeError``.
+        """
+        with self._lock:
+            return list(self.records)
 
     def record(self, direction: str, msg_type: str, payload: Any, peer: str):
         entry = RecordedMessage(direction=direction, msg_type=msg_type,
@@ -45,35 +55,38 @@ class MessageRecorder:
                  msg_type: str,
                  direction: Optional[str] = None,
                  timeout: float = 5.0) -> Optional[RecordedMessage]:
-        """Block until a matching record appears; return it or None on timeout."""
-        existing = self._find(msg_type, direction)
-        if existing:
-            return existing
+        """Block until a matching record appears; return it or None on timeout.
 
+        The waiter is registered *before* the first lookup. Registering it
+        after would lose a message recorded between the lookup and the
+        registration, and the call would then burn the whole timeout.
+        """
         ev = threading.Event()
         with self._lock:
             self._waiters[msg_type].append(ev)
 
-        deadline = time.monotonic() + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            ev.wait(timeout=remaining)
-            result = self._find(msg_type, direction)
-            if result:
-                with self._lock:
-                    if ev in self._waiters[msg_type]:
-                        self._waiters[msg_type].remove(ev)
-                return result
-            if not ev.is_set():
-                break
-            ev.clear()
+        try:
+            existing = self._find(msg_type, direction)
+            if existing:
+                return existing
 
-        with self._lock:
-            if ev in self._waiters.get(msg_type, []):
-                self._waiters[msg_type].remove(ev)
-        return None
+            deadline = time.monotonic() + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                ev.wait(timeout=remaining)
+                result = self._find(msg_type, direction)
+                if result:
+                    return result
+                if not ev.is_set():
+                    return None
+                ev.clear()
+        finally:
+            with self._lock:
+                waiters = self._waiters.get(msg_type)
+                if waiters and ev in waiters:
+                    waiters.remove(ev)
 
     def assert_received(self, msg_type: str,
                         count: int = 1,
@@ -82,7 +95,7 @@ class MessageRecorder:
         assert len(matches) == count, (
             f"[{self.name}] Expected {count}x '{msg_type}' "
             f"(direction={direction!r}), got {len(matches)}.\n"
-            f"All records: {self.records}"
+            f"All records: {self.snapshot()}"
         )
 
     def assert_not_received(self, msg_type: str, direction: Optional[str] = None):

@@ -5,7 +5,7 @@ Each helper targets one or more ``HiveMessageType`` values and raises
 ``AssertionError`` with a diagnostic message (actual recorder contents,
 peer lists, etc.) on failure.
 
-All 14 HiveMessageType values are covered:
+All 13 HiveMessageType values are covered:
 
 Ready (core routing implemented):
   HANDSHAKE  — assert_handshake_complete, assert_encryption_match
@@ -17,14 +17,18 @@ Ready (core routing implemented):
   ESCALATE   — assert_escalate_delivered
   INTERCOM   — assert_intercom_delivered
   BINARY     — assert_binary_delivered
+  PING       — assert_ping_responded
   ACL (all)  — assert_acl_enforced
 
 Pending (core routing not yet implemented; helpers scaffold the check):
   QUERY      — assert_query_routed        (xfail: core#74 / ws#88)
   CASCADE    — assert_cascade_routed      (xfail: core#74 / ws#88)
-  PING       — assert_ping_responded      (xfail: core#74)
   RENDEZVOUS — assert_rendezvous_handled  (xfail: ws#103)
-  THIRDPRTY  — assert_thirdparty_passed   (verify status)
+
+Generic:
+  assert_passthrough_message_delivered — asserts an unhandled/user-land
+  message type traverses the mesh untouched. Takes the ``HiveMessageType``
+  as an argument, so it works for any type with no core-side handler.
 
 Usage::
 
@@ -36,7 +40,9 @@ Usage::
 """
 
 import time
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
+
+from ovos_bus_client.session import Session
 
 from hivescope.node import MasterNode, SatelliteNode
 from hivemind_bus_client.message import HiveMessageType
@@ -49,12 +55,120 @@ SESSION_ID_DEFAULT_FORBIDDEN = "session_id_default_forbidden"
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def recorder_mark() -> float:
+    """Return a timestamp mark comparable with ``RecordedMessage.timestamp``.
+
+    Take one just before a probe emission and pass it as ``since=`` to an
+    assertion helper, so only traffic caused by that probe is examined.
+    """
+    return time.monotonic()
+
+
 def _find(recorder, msg_type_value: str, direction: Optional[str] = None):
     return [
-        r for r in recorder.records
+        r for r in recorder.snapshot()
         if r.msg_type == msg_type_value
         and (direction is None or r.direction == direction)
     ]
+
+
+def _find_broadcast_inner(recorder, inner_msg_type: str):
+    """Inbound broadcasts of *inner_msg_type*, wrapped or bare.
+
+    A current core forwards the BROADCAST envelope with the payload still
+    inside it, so the record's own ``msg_type`` is ``broadcast`` and the type
+    being asked about sits in ``payload["msg_type"]``. A pre-#216 core
+    unwrapped it and the record's own type was the inner one. Accept both so
+    the assertion pins delivery rather than one core's framing.
+    """
+    found = []
+    for r in recorder.snapshot():
+        if r.direction != "in":
+            continue
+        if r.msg_type == inner_msg_type:
+            found.append(r)
+        elif (r.msg_type == HiveMessageType.BROADCAST.value
+              and isinstance(r.payload, dict)
+              and r.payload.get("msg_type") == inner_msg_type):
+            found.append(r)
+    return found
+
+
+# Message types that are connection setup or keepalive, never payload traffic.
+_NON_PAYLOAD_TYPES = (
+    HiveMessageType.HANDSHAKE.value,
+    HiveMessageType.HELLO.value,
+    HiveMessageType.PING.value,
+)
+
+
+def _inner_payload(record) -> dict:
+    """Return the inner OVOS payload dict of a recorded BUS message."""
+    return record.payload if isinstance(record.payload, dict) else {}
+
+
+def _is_policy_denied(record) -> bool:
+    """True when *record* is a ``hive.policy.denied`` response."""
+    return _inner_payload(record).get("type") == "hive.policy.denied"
+
+
+# HiveMessageType values, as strings — passing one of these as *msg_type* is
+# a caller bug: these helpers correlate against the OVOS message type carried
+# INSIDE a denied BUS message (e.g. "speak"), not the HiveMind envelope type.
+_HIVE_MESSAGE_TYPE_VALUES = frozenset(t.value for t in HiveMessageType)
+
+
+def _denied_records(satellite, msg_type: Optional[str] = None,
+                    strict: bool = True):
+    """Return ``hive.policy.denied`` records received by *satellite*.
+
+    Raises:
+        ValueError: if *msg_type* is a ``HiveMessageType`` value (e.g.
+            ``"bus"``, ``"escalate"``) instead of an OVOS message type (e.g.
+            ``"speak"``). Denials echo the OVOS type carried inside the BUS
+            envelope, never the envelope type itself, so passing a
+            HiveMessageType value here can never match and silently hides a
+            broken test.
+
+    When *msg_type* is given, a denial matches only if it echoes that type.
+    hivemind-core echoes it in ``data["denied_type"]``
+    (``HiveMindListenerProtocol._send_policy_denied``); ``data["msg_type"]``
+    and ``data["type"]`` are accepted as well for other policy backends.
+
+    Denials that carry no type at all are ambiguous: they could belong to any
+    message the satellite sent. ``strict=True`` (the default) drops them, so a
+    typed assertion can never pass on unrelated traffic. ``strict=False``
+    keeps them, but only when no typed denial matched — that way a correct
+    typed denial is always preferred over an untyped guess.
+    """
+    if msg_type in _HIVE_MESSAGE_TYPE_VALUES:
+        raise ValueError(
+            f"_denied_records: msg_type={msg_type!r} is a HiveMessageType "
+            "value, not an OVOS message type. Pass the OVOS message type "
+            "that was denied (e.g. 'speak'), not the HiveMind envelope type "
+            "('bus', 'escalate', ...) that carried it."
+        )
+    typed = []
+    untyped = []
+    for r in satellite.recorder.snapshot():
+        if r.direction != "in" or r.msg_type != HiveMessageType.BUS.value:
+            continue
+        payload = _inner_payload(r)
+        if payload.get("type") != "hive.policy.denied":
+            continue
+        if msg_type is None:
+            typed.append((r, payload))
+            continue
+        data = payload.get("data") or {}
+        reported = (data.get("denied_type") or data.get("msg_type")
+                    or data.get("type"))
+        if reported is None:
+            untyped.append((r, payload))
+        elif reported == msg_type:
+            typed.append((r, payload))
+    if typed or msg_type is None or strict:
+        return typed
+    return untyped
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,17 +183,27 @@ def assert_handshake_complete(
     """Assert that *satellite* has completed its handshake with *master*.
 
     Checks:
-    - ``satellite.shim.crypto_key`` is not None (crypto negotiated)
+    - ``satellite.shim.noise_transport`` is set (v3 Noise session negotiated)
     - ``satellite.shim.handshake_event`` is set
     - master's ``connected_peers()`` includes this satellite
     """
     errors: List[str] = []
 
-    if satellite.shim.crypto_key is None:
-        errors.append("satellite.shim.crypto_key is None (no crypto negotiated)")
+    # Wait up to *timeout* for the handshake event; loopback mode completes
+    # the handshake on the server thread, so the check must not be instant.
+    satellite.shim.handshake_event.wait(timeout=timeout)
+
+    # hivemind-core is v3-Noise-only (no legacy fallback, HiveMind-core#309):
+    # negotiated crypto lives in the shim's Noise transport, never in the
+    # removed shim.crypto_key.
+    if getattr(satellite.shim, "noise_transport", None) is None:
+        errors.append("satellite.shim.noise_transport is None (no Noise session negotiated)")
 
     if not satellite.shim.handshake_event.is_set():
-        errors.append("satellite.shim.handshake_event not set (handshake not complete)")
+        errors.append(
+            f"satellite.shim.handshake_event not set after {timeout}s "
+            "(handshake not complete)"
+        )
 
     connected_peers = master.connected_peers()
     if satellite.peer not in connected_peers:
@@ -142,7 +266,7 @@ def assert_hello_received(
     if len(matches) != count:
         raise AssertionError(
             f"Expected {count} HELLO message(s) at master, got {len(matches)}.\n"
-            f"All inbound: {[r.msg_type for r in master.recorder.records if r.direction == 'in']}"
+            f"All inbound: {[r.msg_type for r in master.recorder.snapshot() if r.direction == 'in']}"
         )
 
 
@@ -159,7 +283,7 @@ def assert_bus_message_routed(
     if len(matches) != count:
         raise AssertionError(
             f"Expected {count} BUS message(s) at master, got {len(matches)}.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
 
@@ -177,7 +301,7 @@ def assert_shared_bus_received(
     if len(matches) != count:
         raise AssertionError(
             f"Expected {count} SHARED_BUS message(s) (direction={direction!r}), "
-            f"got {len(matches)}.\nAll records: {node.recorder.records}"
+            f"got {len(matches)}.\nAll records: {node.recorder.snapshot()}"
         )
 
 
@@ -192,11 +316,11 @@ def assert_broadcast_delivered(
 ) -> None:
     """Assert that the BROADCAST reached every node in *recipients*.
 
-    HiveMind core *unwraps* a BROADCAST into its inner payload before
-    forwarding to sibling peers — so each recipient records the *inner*
-    message type (e.g. ``BUS``), not ``BROADCAST`` itself.  This helper
-    therefore counts all inbound messages at recipients; pass
-    ``inner_msg_type`` to narrow to a specific type.
+    Since HiveMind-core#216 a forwarded BROADCAST keeps its envelope
+    (``_rewrap``, HIVEMIND-NODE-1 §3.3): a recipient records a ``broadcast``
+    carrying the inner payload, not the bare inner message. Older cores
+    unwrapped it and recorded the inner type directly, so ``inner_msg_type``
+    matches either shape.
 
     Args:
         recipients: Nodes that should have received the broadcast.
@@ -207,21 +331,24 @@ def assert_broadcast_delivered(
     errors: List[str] = []
     for node in recipients:
         if inner_msg_type:
-            matches = _find(node.recorder, inner_msg_type, direction="in")
+            matches = _find_broadcast_inner(node.recorder, inner_msg_type)
             label = f"BROADCAST(inner={inner_msg_type})"
         else:
-            # count all inbound messages added after handshake
+            # Count inbound payload messages only: connection-setup and
+            # keepalive traffic (HANDSHAKE, HELLO, PING) and policy-denied
+            # responses are not broadcast deliveries. Pass *inner_msg_type*
+            # for an exact match — this fallback is a best-effort filter.
             matches = [
-                r for r in node.recorder.records
+                r for r in node.recorder.snapshot()
                 if r.direction == "in"
-                and r.msg_type not in (HiveMessageType.HANDSHAKE.value, HiveMessageType.HELLO.value)
+                and r.msg_type not in _NON_PAYLOAD_TYPES
+                and not _is_policy_denied(r)
             ]
-            # subtract handshake messages already recorded before the broadcast
-            label = "BROADCAST(any inbound post-handshake)"
+            label = "BROADCAST(any inbound payload message)"
         if len(matches) != count:
             errors.append(
                 f"Node '{node.recorder.name}': expected {count} {label}, got {len(matches)}.\n"
-                f"  All records: {node.recorder.records}"
+                f"  All records: {node.recorder.snapshot()}"
             )
     if errors:
         raise AssertionError("Broadcast not fully delivered:\n  " + "\n  ".join(errors))
@@ -272,7 +399,7 @@ def assert_escalate_delivered(
     if len(matches) != count:
         raise AssertionError(
             f"Expected {count} ESCALATE message(s) at master, got {len(matches)}.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
 
@@ -289,7 +416,7 @@ def assert_intercom_delivered(
     if len(matches) != count:
         raise AssertionError(
             f"Expected {count} INTERCOM message(s) at '{recipient.recorder.name}', "
-            f"got {len(matches)}.\nAll records: {recipient.recorder.records}"
+            f"got {len(matches)}.\nAll records: {recipient.recorder.snapshot()}"
         )
 
 
@@ -315,15 +442,23 @@ def assert_binary_delivered(
     if len(matches) != count:
         raise AssertionError(
             f"Expected {count} BINARY message(s) at master recorder, got {len(matches)}.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
-    # Secondary: if expected_payload given and binary protocol has typed calls, verify
+    # Secondary: if expected_payload is given, the payload must actually match,
+    # either in a typed binary-protocol call or in the recorded raw payload.
     if expected_payload is not None:
-        typed_calls = [c for c in master.binary_protocol.calls if c.data == expected_payload]
-        if not typed_calls:
-            # Acceptable: untyped binary goes through recorder only
-            pass  # recorder check above already passed
+        typed_calls = [c for c in master.binary_protocol.calls
+                       if c.data == expected_payload]
+        recorded = [r for r in matches if r.payload == expected_payload]
+        if not typed_calls and not recorded:
+            raise AssertionError(
+                f"BINARY payload mismatch: expected {expected_payload!r} was not "
+                f"seen.\n"
+                f"  Typed binary protocol calls: "
+                f"{[getattr(c, 'data', None) for c in master.binary_protocol.calls]}\n"
+                f"  Recorded BINARY payloads: {[r.payload for r in matches]}"
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -335,6 +470,7 @@ def assert_acl_enforced(
     satellite: SatelliteNode,
     msg_type: str,
     allowed: bool = False,
+    strict: bool = True,
 ) -> None:
     """Assert policy-admission enforcement for *msg_type* on *satellite*.
 
@@ -343,8 +479,10 @@ def assert_acl_enforced(
     the message) and that no ``bus_inject`` record for *msg_type* appears at
     master (the message was never forwarded to the OVOS bus).
 
-    When ``allowed=True``: verifies the message WAS recorded at master's
-    ``bus_inject`` level (the injection hook was reached).
+    When ``allowed=True``: verifies BOTH that no denial for *msg_type* came
+    back AND that the message WAS recorded at master's ``bus_inject`` level
+    for this satellite's peer.  "No denial" alone is not evidence of delivery
+    — a message that was silently dropped also produces no denial.
 
     For the policy model (``MessageTypeACLPolicy`` + ``OVOSAgentPolicy``):
 
@@ -363,19 +501,10 @@ def assert_acl_enforced(
     satellite is the canonical "was denied" indicator.
     """
     # A policy-denied message causes the master to send hive.policy.denied
-    # back to the satellite (recorded as inbound at the satellite).
-    policy_denied_at_sat = [
-        r for r in satellite.recorder.records
-        if r.direction == "in" and r.msg_type == "bus"
-    ]
-    # Look deeper: check inner payload msg_type for hive.policy.denied
-    denied_responses = []
-    for r in policy_denied_at_sat:
-        payload = r.payload if isinstance(r.payload, dict) else {}
-        # Satellite recorder stores HiveMessage._payload for BUS messages:
-        # {"type": <inner msg_type>, "data": {...}, "context": {...}}
-        if payload.get("type") == "hive.policy.denied":
-            denied_responses.append(r)
+    # back to the satellite (recorded as inbound at the satellite). Only
+    # denials that concern *msg_type* count.
+    denied_responses = [r for r, _ in _denied_records(satellite, msg_type,
+                                                      strict=strict)]
 
     if allowed:
         if denied_responses:
@@ -384,12 +513,25 @@ def assert_acl_enforced(
                 f"{len(denied_responses)} hive.policy.denied response(s).\n"
                 f"Denied responses: {denied_responses}"
             )
+        peer = satellite.peer
+        injected = [
+            r for r in master.recorder.snapshot()
+            if r.direction == "bus_inject" and r.msg_type == msg_type
+            and (peer is None or r.peer == peer)
+        ]
+        if not injected:
+            raise AssertionError(
+                f"ACL: expected '{msg_type}' to be allowed, but master recorded "
+                f"no bus_inject for it (peer={peer!r}) — the message was never "
+                f"delivered to the agent bus.\n"
+                f"All master records: {master.recorder.snapshot()}"
+            )
     else:
         if not denied_responses:
             raise AssertionError(
                 f"ACL violation: '{msg_type}' was NOT blocked — "
                 f"satellite received no hive.policy.denied response.\n"
-                f"Inbound records at satellite: {satellite.recorder.records}"
+                f"Inbound records at satellite: {satellite.recorder.snapshot()}"
             )
 
 
@@ -398,6 +540,7 @@ def assert_policy_denied(
     satellite: SatelliteNode,
     msg_type: str,
     deny_code: Optional[str] = None,
+    strict: bool = True,
 ) -> None:
     """Assert that *msg_type* sent by *satellite* was denied by the policy chain.
 
@@ -409,27 +552,27 @@ def assert_policy_denied(
         master:     The master node (unused in the check, kept for signature
                     parity with other helpers).
         satellite:  The satellite that sent the message.
-        msg_type:   The OVOS message type that should have been denied
-                    (used only for the error message; not matched in the
-                    payload since deny responses don't echo the type).
+        msg_type:   The OVOS message type that should have been denied. The
+                    denial must echo it in ``data["denied_type"]``.
         deny_code:  Optional stable deny code to verify.  If ``None``, any
-                    ``hive.policy.denied`` response satisfies the assertion.
+                    matching ``hive.policy.denied`` response satisfies the
+                    assertion.
+        strict:     ``True`` (default) requires the denial to echo *msg_type*.
+                    Set ``False`` to also accept a denial that names no type —
+                    such a denial cannot be correlated with *msg_type*, so the
+                    assertion then proves only "something was denied".
     """
     # The satellite should have received a HiveMessage whose inner BUS payload
     # has msg_type "hive.policy.denied".  The recorder stores the raw payload
     # dict for inbound "bus" records.
     inbound_bus = [
-        r for r in satellite.recorder.records
-        if r.direction == "in" and r.msg_type == "bus"
+        r for r in satellite.recorder.snapshot()
+        if r.direction == "in" and r.msg_type == HiveMessageType.BUS.value
     ]
 
-    denied_responses = []
-    for r in inbound_bus:
-        payload = r.payload if isinstance(r.payload, dict) else {}
-        # Satellite recorder stores HiveMessage._payload for BUS messages:
-        # {"type": <inner msg_type>, "data": {...}, "context": {...}}
-        if payload.get("type") == "hive.policy.denied":
-            denied_responses.append((r, payload))
+    # Correlate the denial with the message type under test via the echoed
+    # denied_type; see _denied_records for the strict/loose rule.
+    denied_responses = _denied_records(satellite, msg_type, strict=strict)
 
     if not denied_responses:
         raise AssertionError(
@@ -486,16 +629,23 @@ def assert_session_blacklists_injected(
                            ``context["session"]["blacklisted_intents"]``.
     """
     peer = satellite.peer
+    if peer is None:
+        raise AssertionError(
+            f"assert_session_blacklists_injected: satellite "
+            f"'{satellite.name}' has no peer — it is disconnected, so its "
+            "bus_inject records cannot be identified. Assert before "
+            "disconnecting the satellite."
+        )
     bus_injected = [
-        r for r in master.recorder.records
+        r for r in master.recorder.snapshot()
         if r.direction == "bus_inject" and r.msg_type == msg_type
-        and (peer is None or r.peer == peer)
+        and r.peer == peer
     ]
     if not bus_injected:
         raise AssertionError(
             f"assert_session_blacklists_injected: no bus_inject record for "
             f"'{msg_type}' at master (peer={peer!r}) — the message was not forwarded to the bus.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
     record = bus_injected[-1]
@@ -548,9 +698,22 @@ def assert_message_routed(
         msg_type: HiveMessageType name or value string (e.g. ``"BUS"`` or ``"bus"``).
         count: Expected number of messages.
         direction: Optional ``"in"`` or ``"out"`` filter.
-        timeout: Reserved for future async use.
+        timeout: Seconds to wait for the messages to arrive. Needed in
+            loopback mode, where messages land on the server thread.
     """
-    messages = node.recorder.records
+    # Wait until the expected count is reached or the timeout lapses.
+    deadline = time.monotonic() + timeout
+    while len(_find(node.recorder, msg_type, direction)) < count:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if not _find(node.recorder, msg_type, direction):
+            node.recorder.wait_for(msg_type, direction=direction,
+                                   timeout=remaining)
+        else:
+            time.sleep(min(0.02, remaining))
+
+    messages = node.recorder.snapshot()
     if direction:
         messages = [m for m in messages if m.direction == direction]
     matching = [m for m in messages if m.msg_type == msg_type]
@@ -558,7 +721,7 @@ def assert_message_routed(
         raise AssertionError(
             f"Expected {count} '{msg_type}' messages (direction={direction!r}), "
             f"got {len(matching)}.\n"
-            f"All messages: {[m.msg_type for m in node.recorder.records]}"
+            f"All messages: {[m.msg_type for m in node.recorder.snapshot()]}"
         )
 
 
@@ -592,7 +755,7 @@ def assert_client_not_registered(master: MasterNode, peer: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PENDING — QUERY, CASCADE, PING, RENDEZVOUS, THIRDPRTY
+# PENDING — QUERY, CASCADE, PING, RENDEZVOUS
 #
 # These helpers are honest scaffolds for message types whose core routing is
 # not yet implemented. Tests that use them MUST be decorated with:
@@ -620,7 +783,7 @@ def assert_query_routed(
         raise AssertionError(
             f"[PENDING] Expected {count} QUERY message(s) routed by master, "
             f"got {len(matches)}. QUERY routing is not yet in hivemind-core "
-            f"(core#74 / ws#88).\nAll records: {master.recorder.records}"
+            f"(core#74 / ws#88).\nAll records: {master.recorder.snapshot()}"
         )
 
 
@@ -650,24 +813,97 @@ def assert_cascade_routed(
         )
 
 
+def _ping_flood_id(record) -> Optional[Any]:
+    """Best-effort extraction of ``flood_id`` from a recorded PING/PROPAGATE."""
+    payload = record.payload
+    if isinstance(payload, dict):
+        if "flood_id" in payload:
+            return payload["flood_id"]
+        inner = payload.get("payload")
+        if isinstance(inner, dict) and "flood_id" in inner:
+            return inner["flood_id"]
+    return None
+
+
 def assert_ping_responded(
     master: MasterNode,
     satellite: SatelliteNode,
+    timeout: float = 2.0,
+    since: Optional[float] = None,
 ) -> None:
-    """Assert that a PING from *satellite* produced a response at master.
+    """Assert that a PING from *satellite* produced a responsive PING back.
 
-    .. note::
-        PENDING (partial) — PING network-map routing is not fully implemented.
-        Track: `hivemind-core#74 <https://github.com/JarbasHiveMind/HiveMind-core/pull/74>`_.
-        Tests using this helper should be marked ``@pytest.mark.xfail(strict=False)``.
+    There is no ``PONG`` message type in HiveMind. A node answers a PING flood
+    by sending **its own** PING (same ``flood_id``) wrapped in a ``PROPAGATE``
+    to every peer — see ``HiveMindListenerProtocol.handle_ping_message``. So
+    the response this helper looks for is an inbound ``PROPAGATE`` (or bare
+    ``PING``) record at the satellite.
+
+    Checks, in order:
+
+    1. the satellite sent a PING (bare, or wrapped in a PROPAGATE),
+    2. the master recorded it inbound,
+    3. the satellite recorded the master's responsive PING inbound.
+
+    A bare ``PING`` is *not* routed by hivemind-core: only the inner PING of a
+    ``PROPAGATE`` reaches ``handle_ping_message``. Send
+    ``HiveMessage(PROPAGATE, payload=HiveMessage(PING, {"flood_id": ...}))``.
+
+    Args:
+        master:    The master node.
+        satellite: The satellite that sent the PING.
+        timeout:   Seconds to wait for the responsive PING at the satellite.
+        since:     Only records at or after this ``time.monotonic()`` mark
+                   count. Pass :func:`recorder_mark` taken just before the
+                   probe emission, so a second back-to-back probe cannot pass
+                   on a leftover response from a previous one. When the probe
+                   payload carries ``flood_id``, the response is additionally
+                   correlated by that id — an unrelated PING/PROPAGATE record
+                   in the same window does not satisfy the assertion.
     """
-    ping_out = _find(satellite.recorder, HiveMessageType.PING.value, direction="out")
-    ping_in = _find(master.recorder, HiveMessageType.PING.value, direction="in")
+    ping_types = (HiveMessageType.PING.value, HiveMessageType.PROPAGATE.value)
+
+    def _since(records):
+        if since is None:
+            return records
+        return [r for r in records if r.timestamp >= since]
+
+    ping_out = _since([r for r in satellite.recorder.snapshot()
+                        if r.direction == "out" and r.msg_type in ping_types])
+    ping_in = _since([r for r in master.recorder.snapshot()
+                       if r.direction == "in" and r.msg_type in ping_types])
     if not ping_out or not ping_in:
         raise AssertionError(
-            f"[PENDING] PING round-trip incomplete (core#74). "
-            f"satellite sent {len(ping_out)}, master received {len(ping_in)}."
+            f"PING was not delivered: satellite sent {len(ping_out)} "
+            f"PING/PROPAGATE record(s), master received {len(ping_in)}.\n"
+            f"Satellite records: {satellite.recorder.snapshot()}"
         )
+
+    flood_id = _ping_flood_id(ping_out[0])
+
+    def _matching_response():
+        candidates = _since([r for r in satellite.recorder.snapshot()
+                              if r.direction == "in" and r.msg_type in ping_types])
+        if flood_id is None:
+            return candidates
+        return [r for r in candidates if _ping_flood_id(r) == flood_id]
+
+    deadline = time.monotonic() + timeout
+    while True:
+        response = _matching_response()
+        if response:
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
+
+    raise AssertionError(
+        f"PING round-trip incomplete: the satellite never received a "
+        f"responsive PING (an inbound PROPAGATE carrying a PING"
+        f"{f' with flood_id={flood_id!r}' if flood_id is not None else ''}) "
+        f"within {timeout}s. A bare PING is dropped by hivemind-core — wrap "
+        f"it in a PROPAGATE.\nSatellite records: {satellite.recorder.snapshot()}"
+    )
 
 
 def assert_rendezvous_handled(
@@ -687,26 +923,30 @@ def assert_rendezvous_handled(
         raise AssertionError(
             f"[PENDING] Expected {count} RENDEZVOUS message(s) at master, "
             f"got {len(matches)}. RENDEZVOUS routing pending (ws#103).\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
 
-def assert_thirdparty_passed(
+def assert_passthrough_message_delivered(
     node,
+    message_type,
     count: int = 1,
     direction: Optional[str] = None,
 ) -> None:
-    """Assert that *count* THIRDPRTY (3rdparty) messages were passed through *node*.
+    """Assert that *count* messages of *message_type* were passed through *node*
+    untouched.
 
-    THIRDPRTY is user-land passthrough; core is expected to forward it without
-    inspection. Verify the routing status against the matrix in ``LIBRARY.md``.
+    Use this for message types with no core-side handler (e.g. RENDEZVOUS,
+    which has a wire code but is not routed by hivemind-core): core is
+    expected to forward the payload without inspection. Verify the routing
+    status against the matrix in ``LIBRARY.md``.
     """
-    matches = _find(node.recorder, HiveMessageType.THIRDPRTY.value, direction=direction)
+    matches = _find(node.recorder, message_type.value, direction=direction)
     if len(matches) != count:
         raise AssertionError(
-            f"Expected {count} THIRDPRTY message(s) (direction={direction!r}) "
+            f"Expected {count} {message_type.name} message(s) (direction={direction!r}) "
             f"at '{node.recorder.name}', got {len(matches)}.\n"
-            f"All records: {node.recorder.records}"
+            f"All records: {node.recorder.snapshot()}"
         )
 
 
@@ -740,14 +980,14 @@ def assert_msg1_envelope(master: MasterNode, msg_type: str, count: int = 1) -> N
         count:     Minimum number of conformant injections required (default 1).
     """
     injected = [
-        r for r in master.recorder.records
+        r for r in master.recorder.snapshot()
         if r.direction == "bus_inject" and r.msg_type == msg_type
     ]
     if len(injected) < count:
         raise AssertionError(
             f"assert_msg1_envelope: expected at least {count} bus_inject record(s) "
             f"for '{msg_type}', found {len(injected)}.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
     errors: List[str] = []
     for r in injected:
@@ -790,13 +1030,13 @@ def assert_source_stamped(
     """
     peer = satellite.peer
     my_records = [
-        r for r in master.recorder.records
+        r for r in master.recorder.snapshot()
         if r.direction == "bus_inject" and r.peer == peer
     ]
     if not my_records:
         raise AssertionError(
             f"assert_source_stamped: no bus_inject records from peer={peer!r}.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
     errors: List[str] = []
@@ -826,7 +1066,7 @@ def assert_source_stamped(
         for other in other_satellites:
             other_peer = other.peer
             other_records = [
-                r for r in master.recorder.records
+                r for r in master.recorder.snapshot()
                 if r.direction == "bus_inject" and r.peer == other_peer
             ]
             for r in other_records:
@@ -852,6 +1092,8 @@ def assert_destination_routed(
     other_satellites: List[SatelliteNode],
     msg_type: str,
     timeout: float = 2.0,
+    settle: float = 0.2,
+    since: Optional[float] = None,
 ) -> None:
     """Assert an outbound message reaches only *target_satellite* and not others.
 
@@ -876,6 +1118,14 @@ def assert_destination_routed(
         msg_type:          HiveMessage type value to look for at the satellites
                            (typically ``HiveMessageType.BUS.value``).
         timeout:           Seconds to wait for the target to receive the message.
+        settle:            Seconds to wait after the target receipt so a delayed
+                           misroute can still surface.
+        since:             Only traffic recorded at or after this
+                           ``time.monotonic()`` mark counts as cross-talk. Pass
+                           :func:`recorder_mark` taken just before the emit for
+                           an exact window. When omitted, the window opens
+                           ``settle`` seconds before the target's own receipt,
+                           so earlier history never counts.
     """
     # Wait for target
     recv = target_satellite.recorder.wait_for(msg_type, direction="in", timeout=timeout)
@@ -883,17 +1133,25 @@ def assert_destination_routed(
         raise AssertionError(
             f"assert_destination_routed: '{target_satellite.name}' did NOT receive "
             f"a '{msg_type}' message within {timeout}s.\n"
-            f"Records: {target_satellite.recorder.records}"
+            f"Records: {target_satellite.recorder.snapshot()}"
         )
 
     # A delayed misroute can land just after the target receipt; give it a
     # moment to surface before declaring no cross-talk (BRIDGE-1 §3.2).
-    time.sleep(0.2)
+    if settle > 0:
+        time.sleep(settle)
+
+    # Only traffic from this probe counts. Counting the whole history made the
+    # check fail on any earlier unrelated delivery — and pass for the wrong
+    # reason when the probe itself never arrived anywhere.
+    window_start = since if since is not None else (recv.timestamp - max(settle, 0.0))
+
     errors: List[str] = []
     for other in other_satellites:
         matches = [
-            r for r in other.recorder.records
+            r for r in other.recorder.snapshot()
             if r.direction == "in" and r.msg_type == msg_type
+            and r.timestamp >= window_start
         ]
         if matches:
             errors.append(
@@ -912,30 +1170,45 @@ def assert_session_inbound_preserved(
     satellite: SatelliteNode,
     expected_session: dict,
 ) -> None:
-    """Assert the satellite's session is preserved into the bus context on injection.
+    """Assert the satellite's session CONTENTS are preserved into the bus
+    context on injection.
 
     BRIDGE-1 §4.1 (inbound): "The bridge MUST extract the session from the
     external payload and place it in the bus Message context."
 
-    Checks that the last ``bus_inject`` record from *satellite* has a
-    ``context["session"]["session_id"]`` matching *expected_session*'s
-    ``session_id`` (and any other keys explicitly set in *expected_session*).
+    Checks that the last ``bus_inject`` record from *satellite* has each key
+    of *expected_session* present and equal in ``context["session"]``.
+
+    ``session_id`` is deliberately NOT accepted here: since hivemind-core
+    NATs a non-admin's declared session_id to ``f"{conn_nonce}:{declared}"``
+    before it reaches the bus (HIVEMIND-BRIDGE-1 §4), it is never preserved
+    verbatim and an exact-match check on it would be a caller bug baked into
+    the harness. Use :func:`assert_session_id_natted` for the id, and this
+    helper only for the session's other fields (lang, location, units, ...).
 
     Args:
         master:           The master node.
         satellite:        The satellite that sent the message.
-        expected_session: Dict of session fields that must be present and equal
-                          in the injected message's context.session.
+        expected_session: Dict of session fields (excluding ``session_id``)
+                          that must be present and equal in the injected
+                          message's context.session.
     """
+    if "session_id" in expected_session:
+        raise ValueError(
+            "assert_session_inbound_preserved: 'session_id' is NATted per "
+            "connection, not preserved verbatim — use "
+            "assert_session_id_natted() to check it."
+        )
+
     peer = satellite.peer
     records = [
-        r for r in master.recorder.records
+        r for r in master.recorder.snapshot()
         if r.direction == "bus_inject" and r.peer == peer
     ]
     if not records:
         raise AssertionError(
             f"assert_session_inbound_preserved: no bus_inject records from "
-            f"peer={peer!r}.\nAll records: {master.recorder.records}"
+            f"peer={peer!r}.\nAll records: {master.recorder.snapshot()}"
         )
 
     record = records[-1]
@@ -954,6 +1227,241 @@ def assert_session_inbound_preserved(
         raise AssertionError(
             "assert_session_inbound_preserved: BRIDGE-1 §4.1 inbound session "
             "fidelity failures:\n  " + "\n  ".join(errors)
+        )
+
+
+def assert_session_id_natted(
+    master: MasterNode,
+    satellite: SatelliteNode,
+    declared_id: str,
+    *,
+    admin: bool = False,
+) -> None:
+    """Assert the Layer-1 session id installed on *satellite*'s last inbound
+    message is the NATted form of *declared_id*.
+
+    HIVEMIND-BRIDGE-1 §4: a non-admin's declared session_id is namespaced by
+    the connection's nonce (``f"{conn_nonce}:{declared_id}"``) before it
+    reaches the bus, so two peers that happen to declare the same id (e.g.
+    both "default") never collide onto one OVOS session. An admin connection
+    is trusted to address orchestrator sessions directly and is stamped with
+    the raw declared id instead.
+
+    Reads the live ``conn_nonce`` off the master's
+    ``HiveMindClientConnection`` for *satellite*'s peer and asserts the exact
+    NATted string, not just its shape — a wrong or stale nonce cannot slip
+    through a merely-structural check.
+
+    Args:
+        master:      The master node.
+        satellite:   The satellite whose last bus_inject is inspected.
+        declared_id: The session_id *satellite* declared on the wire.
+        admin:       True if the satellite is connected as an admin: the id
+                     is expected raw, not NATted.
+    """
+    peer = satellite.peer
+    if peer is None:
+        raise AssertionError(
+            "assert_session_id_natted: satellite has no peer — it is disconnected."
+        )
+    records = [
+        r for r in master.recorder.snapshot()
+        if r.direction == "bus_inject" and r.peer == peer
+    ]
+    if not records:
+        raise AssertionError(
+            f"assert_session_id_natted: no bus_inject records from "
+            f"peer={peer!r}.\nAll records: {master.recorder.snapshot()}"
+        )
+
+    msg = records[-1].payload
+    actual = ((getattr(msg, "context", {}) or {}).get("session") or {}).get("session_id")
+
+    if admin:
+        expected = declared_id
+    else:
+        conn = master.hm_protocol.clients.get(peer)
+        if conn is None:
+            raise AssertionError(
+                f"assert_session_id_natted: peer {peer!r} is not (or no longer) "
+                "connected at master — cannot read its session_namespace."
+            )
+        # HIVEMIND-BRIDGE-1 §4 NAT token is the durable, identity-scoped
+        # session_namespace (core #299/#306), not the per-connection
+        # conn_nonce that used to back this before those changes.
+        expected = f"{conn.session_namespace}:{declared_id}"
+
+    if actual != expected:
+        raise AssertionError(
+            "assert_session_id_natted: BRIDGE-1 §4 per-connection NAT mismatch "
+            f"— expected session_id={expected!r}, got {actual!r}."
+        )
+
+
+def assert_sessions_isolated(
+    master: MasterNode,
+    satellite: SatelliteNode,
+    declared_ids: List[str],
+) -> None:
+    """Assert that distinct declared session ids sent over ONE connection
+    each land on a distinct, isolated Layer-1 session.
+
+    HIVEMIND-BRIDGE-1 §4 (hivemind-core#287): a single connection may
+    multiplex several declared sessions — a relay forwarding several peers,
+    or a per-call bridge like baresip that mints a fresh session_id per
+    call. Each declared session MUST produce its own OVOS session, never
+    merge onto another, while still sharing the connection's nonce (they
+    are, after all, the same peer).
+
+    For each id in *declared_ids*, finds the bus_inject record whose
+    ``context.session.session_id`` ends with ``f":{declared_id}"`` and
+    checks:
+
+    - a record exists for every declared id (none went missing or collided
+      away);
+    - the resulting Layer-1 ids are pairwise distinct;
+    - they all share exactly one nonce prefix (same connection).
+
+    Args:
+        master:       The master node.
+        satellite:    The satellite that declared all of *declared_ids* over
+                      its single connection.
+        declared_ids: The distinct session_id values sent, in any order.
+    """
+    peer = satellite.peer
+    records = [
+        r for r in master.recorder.snapshot()
+        if r.direction == "bus_inject" and r.peer == peer
+    ]
+
+    layer1_by_declared: Dict[str, str] = {}
+    for declared in declared_ids:
+        suffix = f":{declared}"
+        match = next(
+            (r for r in records
+             if (((getattr(r.payload, "context", {}) or {}).get("session") or {})
+                 .get("session_id") or "").endswith(suffix)),
+            None,
+        )
+        if match is None:
+            raise AssertionError(
+                f"assert_sessions_isolated: no bus_inject record with a "
+                f"Layer-1 session_id ending in {suffix!r} (declared={declared!r}).\n"
+                f"All records from peer: {records}"
+            )
+        session = (getattr(match.payload, "context", {}) or {}).get("session") or {}
+        layer1_by_declared[declared] = session.get("session_id")
+
+    layer1_ids = list(layer1_by_declared.values())
+    if len(set(layer1_ids)) != len(declared_ids):
+        raise AssertionError(
+            "assert_sessions_isolated: declared session ids did not each "
+            f"produce a distinct Layer-1 id: {layer1_by_declared}"
+        )
+
+    prefixes = {sid.split(":", 1)[0] for sid in layer1_ids}
+    if len(prefixes) != 1:
+        raise AssertionError(
+            "assert_sessions_isolated: expected all declared sessions to "
+            f"share a single connection nonce prefix, got {prefixes}: "
+            f"{layer1_by_declared}"
+        )
+
+
+def _location_signature(location: Optional[Dict[str, Any]]) -> tuple:
+    """Canonical ``(lat, lon, tz)`` signature for a session ``location`` value.
+
+    OVOS-SESSION-1 §3.5 made ``Session.location`` a flat ``{lat, lon, tz}``
+    wire shape; older ovos-bus-client releases emit the legacy nested
+    mycroft.conf shape (``city``/``coordinate``/``timezone``) instead. Read
+    both through the ``Session`` API so a baseline location compares equal
+    across either wire shape — the value is what must survive, not its
+    on-the-wire layout.
+    """
+    sess = Session(location_prefs=location or {})
+    loc = getattr(sess, "location", None)
+    if isinstance(loc, dict):
+        return (loc.get("lat"), loc.get("lon"), sess.timezone)
+    prefs = sess.location_preferences or {}
+    coordinate = prefs.get("coordinate", {}) or {}
+    return (coordinate.get("latitude"), coordinate.get("longitude"), sess.timezone)
+
+
+def assert_session_contents_merged_over_baseline(
+    master: MasterNode,
+    satellite: SatelliteNode,
+    expected_baseline: dict,
+) -> None:
+    """Assert a thin message keeps the HELLO-established session baseline.
+
+    HIVEMIND-BRIDGE-1 §4: a per-message session that omits a field (e.g. a
+    control message carrying only ``session_id``) is merged over the
+    connection's HELLO baseline, not replaced by a fresh session — the
+    baseline's ``location``/``lang``/etc. survive untouched. Building a
+    fresh ``Session`` for a thin message instead of merging would fabricate
+    the master's own defaults for the missing fields, silently overwriting
+    a satellite's real values (e.g. its timezone).
+
+    Checks that the last ``bus_inject`` record from *satellite* carries
+    every field in *expected_baseline* unchanged in ``context["session"]``.
+
+    Do not pass ``session_id`` here — it is NATted per connection, not a
+    preserved content field; use :func:`assert_session_id_natted` for it.
+
+    Args:
+        master:            The master node.
+        satellite:         The satellite whose last bus_inject is inspected.
+        expected_baseline: HELLO-time session fields (e.g. ``{"lang": ...,
+                           "location": ...}``) that a later thin message
+                           must still carry.
+    """
+    if "session_id" in expected_baseline:
+        raise ValueError(
+            "assert_session_contents_merged_over_baseline: 'session_id' is "
+            "NATted per connection, not a preserved content field — use "
+            "assert_session_id_natted() to check it."
+        )
+
+    peer = satellite.peer
+    records = [
+        r for r in master.recorder.snapshot()
+        if r.direction == "bus_inject" and r.peer == peer
+    ]
+    if not records:
+        raise AssertionError(
+            f"assert_session_contents_merged_over_baseline: no bus_inject "
+            f"records from peer={peer!r}.\nAll records: {master.recorder.snapshot()}"
+        )
+
+    msg = records[-1].payload
+    actual_session = (getattr(msg, "context", {}) or {}).get("session") or {}
+
+    errors: List[str] = []
+    for key, expected_val in expected_baseline.items():
+        actual_val = actual_session.get(key)
+        if key == "location":
+            # Compare via the Session API (see _location_signature) rather
+            # than the raw wire dict: OVOS-SESSION-1 §3.5 lets ``location``
+            # travel as either the flat {lat, lon, tz} shape or the legacy
+            # nested one, and both must be accepted as "unchanged".
+            if _location_signature(actual_val) != _location_signature(expected_val):
+                errors.append(
+                    f"session.{key}: expected baseline value {expected_val!r}, "
+                    f"got {actual_val!r} — the thin message clobbered the "
+                    "baseline instead of merging over it"
+                )
+            continue
+        if actual_val != expected_val:
+            errors.append(
+                f"session.{key}: expected baseline value {expected_val!r}, "
+                f"got {actual_val!r} — the thin message clobbered the "
+                "baseline instead of merging over it"
+            )
+
+    if errors:
+        raise AssertionError(
+            "assert_session_contents_merged_over_baseline: BRIDGE-1 §4 "
+            "contents-merge failures:\n  " + "\n  ".join(errors)
         )
 
 
@@ -982,7 +1490,7 @@ def assert_session_outbound_preserved(
         raise AssertionError(
             f"assert_session_outbound_preserved: '{satellite.name}' received no "
             f"inbound BUS message within {timeout}s.\n"
-            f"Records: {satellite.recorder.records}"
+            f"Records: {satellite.recorder.snapshot()}"
         )
 
     # payload for inbound BUS records is the raw _payload dict:
@@ -1033,7 +1541,7 @@ def assert_fifo_order(
     deadline = time.monotonic() + timeout
     while True:
         records = [
-            r for r in master.recorder.records
+            r for r in master.recorder.snapshot()
             if r.direction == "bus_inject" and r.peer == peer and r.msg_type == msg_type
         ]
         if len(records) >= count:
@@ -1043,7 +1551,7 @@ def assert_fifo_order(
         time.sleep(0.02)
 
     records = [
-        r for r in master.recorder.records
+        r for r in master.recorder.snapshot()
         if r.direction == "bus_inject" and r.peer == peer and r.msg_type == msg_type
     ][-count:]  # validate the most recent batch, not stale earlier traffic
 
@@ -1051,7 +1559,7 @@ def assert_fifo_order(
         raise AssertionError(
             f"assert_fifo_order: expected {count} '{msg_type}' bus_inject records "
             f"from peer={peer!r}, got {len(records)} after {timeout}s.\n"
-            f"All records: {master.recorder.records}"
+            f"All records: {master.recorder.snapshot()}"
         )
 
     errors: List[str] = []
@@ -1071,14 +1579,15 @@ def assert_fifo_order(
                     f"followed by seq[{i}]={seqs[i]} (expected strictly increasing)"
                 )
     else:
-        # Fall back to timestamp order
-        timestamps = [r.timestamp for r in records]
-        for i in range(1, len(timestamps)):
-            if timestamps[i] < timestamps[i - 1]:
-                errors.append(
-                    f"FIFO reorder at position {i}: timestamp[{i-1}]={timestamps[i-1]:.6f} "
-                    f"followed by timestamp[{i}]={timestamps[i]:.6f}"
-                )
+        # Timestamps are stamped on arrival, so they are always ascending —
+        # checking them proves nothing. FIFO can only be verified with an
+        # explicit sequence marker set by the sender.
+        missing = [i for i, seq in enumerate(seqs) if seq is None]
+        raise AssertionError(
+            "assert_fifo_order: cannot verify FIFO without a '_fifo_seq' marker. "
+            f"Records at position(s) {missing} carry no data['_fifo_seq']. "
+            "Send each message with a strictly increasing data['_fifo_seq'] value."
+        )
 
     if errors:
         raise AssertionError(
@@ -1108,14 +1617,14 @@ def assert_session_propagated_unchanged(
         msg_type:  Optional OVOS message type to filter records.
     """
     records = [
-        r for r in master.recorder.records
+        r for r in master.recorder.snapshot()
         if r.direction == "bus_inject"
         and (msg_type is None or r.msg_type == msg_type)
     ]
     if not records:
         raise AssertionError(
             f"assert_session_propagated_unchanged: no bus_inject records "
-            f"(msg_type={msg_type!r}).\nAll records: {master.recorder.records}"
+            f"(msg_type={msg_type!r}).\nAll records: {master.recorder.snapshot()}"
         )
 
     errors: List[str] = []
@@ -1164,7 +1673,7 @@ def assert_source_hidden(
         raise AssertionError(
             f"assert_source_hidden: '{satellite.name}' received no inbound "
             f"'{mt}' message within {timeout}s.\n"
-            f"Records: {satellite.recorder.records}"
+            f"Records: {satellite.recorder.snapshot()}"
         )
 
     payload = recv.payload if isinstance(recv.payload, dict) else {}

@@ -5,7 +5,9 @@ InProcessHiveShim acts as the HiveMessageBusClient-compatible object that
 HiveMindSlaveProtocol requires, without any WebSocket involvement.
 """
 import json
+import logging
 import threading
+from collections import deque
 from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
@@ -29,7 +31,70 @@ from hivescope.plugins.agent import TestAgentProtocol
 from hivescope.plugins.binary import TestBinaryProtocol
 from hivescope.plugins.network import TestNetworkProtocol
 from hivescope.recorder import MessageRecorder, RecordedMessage
-from hivescope.utils import make_identity
+from hivescope.utils import make_identity, remove_identity_tmpdir
+
+log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Non-reentrant in-process delivery pump
+# ---------------------------------------------------------------------------
+#
+# A real WebSocket write returns before the peer reads the frame: delivery is
+# asynchronous, so a handler that sends never runs inside the sender's own call
+# stack. The in-process shim has no socket — a "send" reaches the peer by
+# calling straight into its receive path — so without care a handler's outbound
+# send re-enters the very send that is still on the stack.
+#
+# hivemind-bus-client's ``NoiseTransport.send_message`` holds a single,
+# non-reentrant ``_send_lock`` across the whole wire-send (encrypt + every
+# raw_send chunk) so a message's frames stay contiguous and its Noise nonces
+# stay ordered. If a send re-enters ``send_message`` on the same transport from
+# the same thread — a master relaying a frame down to a peer whose handler then
+# sends back on that connection (``_relay_downstream`` -> ``conn.send``) — the
+# second acquire blocks on a lock the thread already holds. Deadlock.
+#
+# The cure is to model the socket: a delivery started while another delivery is
+# in progress on this thread is queued and runs only after the outer one has
+# fully returned and released ``_send_lock``. Every top-level entry point — a
+# satellite's ``send()``/``connect()`` handshake and a master's
+# ``send_to_satellite``/``send_to_all``/``emit_on_bus`` — funnels its work
+# through :func:`_deliver`, which roots the pump OUTSIDE any ``send_message``.
+# ``_receive_raw`` (the only thing hivemind-core's ``raw_send`` calls, always
+# from inside a ``send_message``) therefore always finds the pump already
+# draining and merely enqueues, so the wire-send returns and the lock is free
+# before the peer's handler runs. The queue is FIFO and drained in order, so
+# the frames of one message — and messages relative to one another — arrive in
+# the order they were sent, as Noise's in-order transport requires.
+#
+# The pump is thread-local: all in-process traffic runs on the caller's thread,
+# and a per-thread queue keeps two threads driving separate topologies from
+# sharing state.
+
+_pump = threading.local()
+
+
+def _deliver(action) -> None:
+    """Run ``action`` once every delivery already in flight on this thread has
+    returned.
+
+    The first call on the thread drains the queue to completion; a call made
+    while that drain is running only appends, so no delivery ever executes
+    inside another delivery's ``send_message`` (and thus never re-enters its
+    ``_send_lock``). Order is preserved: actions run in the order enqueued.
+    """
+    queue = getattr(_pump, "queue", None)
+    if queue is None:
+        queue = _pump.queue = deque()
+    queue.append(action)
+    if getattr(_pump, "draining", False):
+        return
+    _pump.draining = True
+    try:
+        while queue:
+            queue.popleft()()
+    finally:
+        _pump.draining = False
 
 
 # ---------------------------------------------------------------------------
@@ -43,8 +108,12 @@ class InProcessHiveShim:
     - emit(HiveMessage)  → routes upstream to the master's handle_message()
     - on(event, func)    → registers on the internal EventEmitter
     - emitter            → the EventEmitter that dispatches inbound messages
-    - crypto_key, cipher, json_encoding, handshake_event, session_id  — all
-      the attributes SlaveProtocol sets/reads during the handshake
+    - crypto_key, cipher, json_encoding, handshake_event, session_id, password
+      — all the attributes SlaveProtocol reads off a client during the
+      handshake and connection lifecycle. `password` is read off the shim's
+      identity, the same way `useragent` and `site_id` are — a real client
+      keeps credentials on itself rather than on the node identity, and the
+      shim has no separate credential store to mirror that with.
     """
 
     def __init__(self, identity: NodeIdentity, satellite_ref: "SatelliteNode"):
@@ -56,6 +125,9 @@ class InProcessHiveShim:
         self.cipher: SupportedCiphers = SupportedCiphers.AES_GCM
         self.handshake_event = threading.Event()
         self._session_id: str = str(uuid4())
+        # HiveMindSlaveProtocol._should_use_noise() checks this against the
+        # server's advertised max_protocol_version to select the Noise path
+        self.max_protocol_version: int = 3
 
     # --- properties accessed by HiveMindSlaveProtocol ---
 
@@ -66,6 +138,18 @@ class InProcessHiveShim:
     @property
     def session_id(self) -> str:
         return self._session_id
+
+    @property
+    def password(self) -> str:
+        """The password for the link to the master.
+
+        A real client keeps its credentials on the client rather than on the
+        node identity, because they say how to reach one particular master
+        and are not part of who the node is. This shim has no separate
+        credential store, so it reports the identity's — the same way it
+        reports the useragent and the site.
+        """
+        return self.identity.password
 
     @property
     def site_id(self) -> Optional[str]:
@@ -126,8 +210,18 @@ class MasterNode:
                handshake_enabled: bool = True,
                agent_protocol: "TestAgentProtocol" = None,
                use_loopback: bool = False,
-               db: "Any" = None,
-               **kwargs) -> "MasterNode":
+               db: "Any" = None) -> "MasterNode":
+        """Build a master node.
+
+        There is deliberately no ``**kwargs`` catch-all: an unknown keyword
+        must raise ``TypeError`` instead of being silently discarded, because
+        a typo like ``requires_crypto=False`` would otherwise misconfigure the
+        node and the test would still pass.
+
+        ``require_crypto`` and ``handshake_enabled`` are accepted-and-ignored
+        under v3-Noise-only — the Noise handshake is mandatory and always
+        encrypted; kept for caller compatibility.
+        """
         identity = make_identity(name)
         # Default to the in-memory store; callers may inject a real
         # ClientDatabase-compatible backend (e.g. a migrated sqlite/redis
@@ -141,18 +235,19 @@ class MasterNode:
             db=db,
             agent_protocol=agent,
             binary_data_protocol=binary,
-            require_crypto=require_crypto,
-            handshake_enabled=handshake_enabled,
             peer=f"{name}:0.0.0.0",
         )
         # Use LoopbackNetworkProtocol (real WebSocket) if use_loopback=True,
         # otherwise use TestNetworkProtocol (in-process wiring)
+        recorder = MessageRecorder(name=name)
         if use_loopback:
             from hivescope.plugins.loopback import LoopbackNetworkProtocol
-            network = LoopbackNetworkProtocol(hm_protocol=hm_proto)
+            # The recorder is passed so undecodable frames land in the record
+            # list instead of only in the log.
+            network = LoopbackNetworkProtocol(hm_protocol=hm_proto,
+                                              recorder=recorder)
         else:
             network = TestNetworkProtocol(hm_protocol=hm_proto)
-        recorder = MessageRecorder(name=name)
         _instrument_master(hm_proto, recorder)
         return cls(name=name, identity=identity, db=db,
                    agent_protocol=agent, binary_protocol=binary,
@@ -171,8 +266,7 @@ class MasterNode:
                            allowed_types: Optional[List[str]] = None,
                            msg_blacklist: Optional[List[str]] = None,
                            skill_blacklist: Optional[List[str]] = None,
-                           intent_blacklist: Optional[List[str]] = None,
-                           crypto_key: Optional[str] = None):
+                           intent_blacklist: Optional[List[str]] = None):
         """Pre-populate the DB so a satellite with this key can connect."""
         self.db.add_client(
             name="test-satellite",
@@ -186,7 +280,6 @@ class MasterNode:
             message_blacklist=msg_blacklist,
             skill_blacklist=skill_blacklist,
             intent_blacklist=intent_blacklist,
-            crypto_key=crypto_key,
         )
 
     # --- sending to connected satellites ---
@@ -199,16 +292,21 @@ class MasterNode:
                 f"No connected client with peer '{peer}'. "
                 f"Connected peers: {list(self.hm_protocol.clients)}"
             )
-        conn.send(message)
+        # Root the delivery pump here, outside conn.send's send_message, so a
+        # peer handler woken by this frame enqueues its own sends instead of
+        # re-entering the transport's _send_lock (relay fan-out deadlock).
+        _deliver(lambda: conn.send(message))
 
     def send_to_all(self, message: HiveMessage):
         """Broadcast a HiveMessage to all currently connected satellites."""
-        for peer, conn in list(self.hm_protocol.clients.items()):
-            conn.send(message)
+        def _broadcast():
+            for peer, conn in list(self.hm_protocol.clients.items()):
+                conn.send(message)
+        _deliver(_broadcast)
 
     def emit_on_bus(self, message: Message):
         """Emit an OVOS message on the internal agent bus (simulates a skill response)."""
-        self.agent_protocol.bus.emit(message)
+        _deliver(lambda: self.agent_protocol.bus.emit(message))
 
     # --- waiting / assertion ---
 
@@ -219,6 +317,12 @@ class MasterNode:
 
     def connected_peers(self) -> List[str]:
         return list(self.hm_protocol.clients.keys())
+
+    # --- cleanup ---
+
+    def cleanup(self):
+        """Release the temp files this node's identity created."""
+        remove_identity_tmpdir(self.identity)
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +365,6 @@ class SatelliteNode:
         recorder = MessageRecorder(name=name)
 
         # shim acts as the HiveMessageBusClient for the slave protocol
-        sat_ref_holder = [None]  # forward reference trick
         shim = InProcessHiveShim(identity=identity, satellite_ref=None)
 
         slave = HiveMindSlaveProtocol(
@@ -313,25 +416,39 @@ class SatelliteNode:
         )
 
         # connect_satellite sets self._connection and calls handle_new_client;
-        # the password handshake completes synchronously inside that call.
-        master.network_protocol.connect_satellite(satellite=self)
+        # the handshake completes synchronously inside that call. Route it
+        # through the delivery pump so it roots outside any send_message, the
+        # same as every other traffic-generating entry point.
+        _deliver(lambda: master.network_protocol.connect_satellite(satellite=self))
 
         # For RSA-only mode (no password), slave never calls start_handshake
         # automatically — do it here as the real client would via wait_for_handshake.
         if not self.shim.handshake_event.is_set():
-            self.slave_protocol.start_handshake()
+            _deliver(self.slave_protocol.start_handshake)
 
         if not self.shim.handshake_event.is_set():
             raise RuntimeError(
                 f"Handshake did not complete for satellite {self.name!r}. "
                 "Ensure the satellite has a password set (password-based handshake) "
-                "or that the master has handshake_enabled=True (RSA handshake)."
+                "or that it is a v3-capable client (Noise handshake is always on)."
             )
+
+    def wait_for_handshake(self, timeout: float = 5.0) -> bool:
+        """Block until the handshake completes; return True if it did.
+
+        The handshake event lives on the shim, which the slave protocol sets
+        when crypto negotiation finishes.
+        """
+        return self.shim.handshake_event.wait(timeout=timeout)
 
     def disconnect(self):
         """Disconnect from the master."""
         if self._connection and self._master:
             self._master.hm_protocol.handle_client_disconnected(self._connection)
+
+    def cleanup(self):
+        """Release the temp files this node's identity created."""
+        remove_identity_tmpdir(self.identity)
 
     # --- sending ---
 
@@ -344,12 +461,14 @@ class SatelliteNode:
                                site_id=self.identity.site_id or "unknown")
                 message.context["session"] = sess.serialize()
             message = HiveMessage(HiveMessageType.BUS, payload=message)
-        self.recorder.record("out", message.msg_type, message._payload, "master")
+        # Guard BEFORE recording: a send that never happened must not appear
+        # in the recorder as an outbound message.
         if self._master is None or self._connection is None:
             raise RuntimeError(
                 f"Satellite {self.name!r} is not connected to any master."
             )
-        self._master.hm_protocol.handle_message(message, self._connection)
+        self.recorder.record("out", message.msg_type, message._payload, "master")
+        _deliver(lambda: self._master.hm_protocol.handle_message(message, self._connection))
 
     # --- receiving (called by master's send_msg) ---
 
@@ -362,21 +481,39 @@ class SatelliteNode:
             # Connection not yet established (shouldn't normally happen)
             return
 
+        peer = self._connection.peer
+
+        # self._connection is the master's HiveMindClientConnection, shared
+        # in-process for framing/session bookkeeping; it carries the master's
+        # own Noise transport (the responder's cipher states), not the
+        # satellite's (the initiator's). Decrypting a v3 session with the
+        # wrong side's transport always fails AEAD authentication, so decode
+        # borrows the satellite's own transport for the duration of the call.
+        client_transport = getattr(self.shim, "noise_transport", None)
+        saved_transport = self._connection.noise_transport
+        if client_transport is not None:
+            self._connection.noise_transport = client_transport
         try:
             message = self._connection.decode(payload)
         except Exception as exc:
-            import traceback
-            print(f"[{self.name}] _receive_raw decode error: {exc}")
-            traceback.print_exc()
+            log.exception("[%s] _receive_raw decode error: %s", self.name, exc)
+            # Record the failure so a test waiting on a message fails fast with
+            # the decode error in the record list instead of on timeout.
+            self.recorder.record("in", "_decode_error", {"error": str(exc)}, peer)
             return
+        finally:
+            self._connection.noise_transport = saved_transport
 
-        self.recorder.record("in", message.msg_type, message._payload,
-                             self._connection.peer if self._connection else "master")
+        self.recorder.record("in", message.msg_type, message._payload, peer)
 
-        # Dispatch through the slave protocol's registered handlers
-        self.shim.emitter.emit(message.msg_type, message)
+        # Dispatch through the slave protocol's registered handlers. raw_send
+        # reaches here from inside NoiseTransport.send_message, so this must not
+        # run a handler synchronously (the handler's own outbound send would
+        # re-enter the held _send_lock); _deliver enqueues it behind the send
+        # in progress and it runs once that send has returned.
+        _deliver(lambda: self.shim.emitter.emit(message.msg_type, message))
 
-    def _on_disconnect(self):
+    def _on_disconnect(self, code: int = 1000, reason: str = ""):
         conn = self._connection
         master = self._master
         self._connection = None
@@ -405,7 +542,15 @@ class SatelliteNode:
             event.set()
 
         self.internal_bus.once(ovos_type, handler)
-        event.wait(timeout=timeout)
+        try:
+            event.wait(timeout=timeout)
+        finally:
+            # A `once` listener that never fired stays registered forever and
+            # would capture an unrelated later message.
+            try:
+                self.internal_bus.remove(ovos_type, handler)
+            except (ValueError, KeyError):
+                pass  # already fired and self-removed
         return result[0] if result else None
 
     @property
