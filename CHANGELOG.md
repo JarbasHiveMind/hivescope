@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.3a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.3a1) (2026-09-04)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.2a1...0.8.3a1)
+
+**Merged pull requests:**
+
+- fix: allow hivemind-core 5.x [\#67](https://github.com/JarbasHiveMind/hivescope/pull/67) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.8.2a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.2a1) (2026-09-03)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.1a1...0.8.2a1)
