@@ -475,3 +475,38 @@ def test_natural_language_query_ends_cleanly():
     agent.bus.on("recognizer_loop:utterance", _reply)
     chunks = list(agent.natural_language_query("hello", "en-US", timeout=2.0))
     assert chunks == ["hi", None]
+
+
+def test_a_direct_connection_send_that_provokes_a_reply_returns():
+    """PING through a relay: the relay's handler replies on the connection it
+    was received on. When a test sends on that connection directly, the
+    reply must be delivered after send() returns, never inside the Noise
+    send lock (where it deadlocks)."""
+    import threading
+    import time
+    import uuid
+    from hivemind_bus_client.message import HiveMessage, HiveMessageType
+    from hivescope.topology import TopologyBuilder
+
+    b = TopologyBuilder()
+    b.add_master("M0")
+    relay = b.add_relay("R1", upstream=b.get_master("M0")).listener
+    b.add_satellite("S0", upstream=relay)
+    b.start_all()
+    try:
+        m0 = b.get_master("M0")
+        ping = HiveMessage(HiveMessageType.PING, payload={
+            "flood_id": str(uuid.uuid4()), "timestamp": time.time(),
+            "peer": m0.hm_protocol.peer, "site_id": "test-site"})
+        propagate = HiveMessage(HiveMessageType.PROPAGATE, payload=ping)
+        done = threading.Event()
+
+        def send_all():
+            for client in list(m0.hm_protocol.clients.values()):
+                client.send(propagate)
+            done.set()
+
+        threading.Thread(target=send_all, daemon=True).start()
+        assert done.wait(15), "send() never returned: the reply deadlocked on the send lock"
+    finally:
+        b.stop_all()
