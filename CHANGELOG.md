@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.5a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.5a1) (2026-09-09)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.4a3...0.8.5a1)
+
+**Merged pull requests:**
+
+- fix: route a direct connection send through the delivery pump [\#73](https://github.com/JarbasHiveMind/hivescope/pull/73) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.8.4a3](https://github.com/JarbasHiveMind/hivescope/tree/0.8.4a3) (2026-09-09)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.4a2...0.8.4a3)
