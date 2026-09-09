@@ -601,6 +601,18 @@ def _instrument_master(hm_proto: HiveMindListenerProtocol,
             _orig_send_msg(payload, is_bin)
 
         client.send_msg = _recording_send_msg
+
+        # A test that calls the connection's send() directly starts no drain,
+        # so the delivery it triggers would run inside the Noise _send_lock
+        # and a handler that replies on the same connection would deadlock
+        # on it. Route send() through the pump so the drain begins before the
+        # lock is taken and the reply is delivered after send() returns.
+        _orig_send = client.send
+
+        def _pumped_send(*args, **kwargs):
+            _deliver(lambda: _orig_send(*args, **kwargs))
+
+        client.send = _pumped_send
         _orig_new_client(client)
 
     hm_proto.handle_new_client = _recording_new_client
