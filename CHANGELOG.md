@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.4a3](https://github.com/JarbasHiveMind/hivescope/tree/0.8.4a3) (2026-09-09)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.4a2...0.8.4a3)
+
+**Merged pull requests:**
+
+- ci: install the plot extra by its name in the coverage job [\#75](https://github.com/JarbasHiveMind/hivescope/pull/75) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.8.4a2](https://github.com/JarbasHiveMind/hivescope/tree/0.8.4a2) (2026-09-04)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.4a1...0.8.4a2)
