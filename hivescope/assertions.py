@@ -18,11 +18,11 @@ Ready (core routing implemented):
   INTERCOM   — assert_intercom_delivered
   BINARY     — assert_binary_delivered
   PING       — assert_ping_responded
+  QUERY      — assert_query_routed
+  CASCADE    — assert_cascade_routed
   ACL (all)  — assert_acl_enforced
 
 Pending (core routing not yet implemented; helpers scaffold the check):
-  QUERY      — assert_query_routed        (xfail: core#74 / ws#88)
-  CASCADE    — assert_cascade_routed      (xfail: core#74 / ws#88)
   RENDEZVOUS — assert_rendezvous_handled  (xfail: ws#103)
 
 Generic:
@@ -755,9 +755,9 @@ def assert_client_not_registered(master: MasterNode, peer: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PENDING — QUERY, CASCADE, PING, RENDEZVOUS
+# QUERY, CASCADE, PING, and the pending RENDEZVOUS
 #
-# These helpers are honest scaffolds for message types whose core routing is
+# RENDEZVOUS is an honest scaffold for a message type whose core routing is
 # not yet implemented. Tests that use them MUST be decorated with:
 #
 #   @pytest.mark.xfail(reason="...", strict=False)
@@ -766,39 +766,85 @@ def assert_client_not_registered(master: MasterNode, peer: str) -> None:
 # See templates/test_template_query.py et al. for ready-to-copy examples.
 # ─────────────────────────────────────────────────────────────────────────────
 
+#: Inner BUS message types that ``_build_query_response`` (hivemind-core)
+#: wraps a QUERY answer in: one ``speak`` per streamed chunk, the
+#: ``hive.query.complete`` stream terminator, or ``hive.query.timeout`` when
+#: no agent could answer.
+_QUERY_ANSWER_TYPES = frozenset({"speak", "hive.query.complete", "hive.query.timeout"})
+
+
 def assert_query_routed(
     master: MasterNode,
+    satellite: SatelliteNode,
     count: int = 1,
+    timeout: float = 5.0,
+    since: Optional[float] = None,
 ) -> None:
-    """Assert that *count* QUERY messages were routed by master.
+    """Assert *count* QUERY messages reached master AND the answer round-tripped
+    back to *satellite* (NODE-1 §5.2).
 
-    .. note::
-        PENDING — QUERY routing is not yet implemented in hivemind-core.
-        Track: `hivemind-core#74 <https://github.com/JarbasHiveMind/HiveMind-core/pull/74>`_
-        and `hivemind-websocket-client#88 <https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88>`_.
-        Tests using this helper should be marked ``@pytest.mark.xfail(strict=False)``.
+    ``handle_query_message`` (hivemind-core) replies downstream with a
+    QUERY-typed HiveMessage wrapping a BUS ``Message`` — see
+    ``_QUERY_ANSWER_TYPES``. Counting the inbound frame at master only proves
+    it was accepted (a malformed QUERY is recorded there too, before the
+    payload is even validated); it says nothing about whether the caller ever
+    heard back. This waits for that response at the satellite.
+
+    Args:
+        master:    The master node.
+        satellite: The satellite that sent the QUERY.
+        count:     Expected number of QUERY requests at master, and of
+                   answers delivered back to *satellite*.
+        timeout:   Seconds to wait for the answer(s) at the satellite.
+        since:     Only records at or after this ``time.monotonic()`` mark
+                   count. Pass :func:`recorder_mark` taken just before the
+                   probe emission.
     """
-    matches = _find(master.recorder, HiveMessageType.QUERY.value)
-    if len(matches) != count:
+    def _since(records):
+        if since is None:
+            return records
+        return [r for r in records if r.timestamp >= since]
+
+    requests = _since(_find(master.recorder, HiveMessageType.QUERY.value, direction="in"))
+    if len(requests) != count:
         raise AssertionError(
-            f"[PENDING] Expected {count} QUERY message(s) routed by master, "
-            f"got {len(matches)}. QUERY routing is not yet in hivemind-core "
-            f"(core#74 / ws#88).\nAll records: {master.recorder.snapshot()}"
+            f"Expected {count} QUERY message(s) routed by master, "
+            f"got {len(requests)}.\nAll records: {master.recorder.snapshot()}"
         )
+
+    def _answers():
+        found = []
+        for r in _since(satellite.recorder.snapshot()):
+            if r.direction != "in" or r.msg_type != HiveMessageType.QUERY.value:
+                continue
+            inner = r.payload if isinstance(r.payload, dict) else {}
+            bus = inner.get("payload") if isinstance(inner.get("payload"), dict) else {}
+            if bus.get("type") in _QUERY_ANSWER_TYPES:
+                found.append(r)
+        return found
+
+    deadline = time.monotonic() + timeout
+    while True:
+        answers = _answers()
+        if len(answers) >= count:
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
+
+    raise AssertionError(
+        f"QUERY reached master but its answer never reached the satellite: "
+        f"expected {count} QUERY response(s) (msg_type='query', inner BUS "
+        f"type in {sorted(_QUERY_ANSWER_TYPES)}) within {timeout}s, got "
+        f"{len(_answers())}.\nSatellite records: {satellite.recorder.snapshot()}"
+    )
 
 
 def assert_cascade_routed(
     *nodes,
     count: int = 1,
 ) -> None:
-    """Assert that every node in *nodes* received *count* CASCADE messages.
-
-    .. note::
-        PENDING — CASCADE routing is not yet implemented in hivemind-core.
-        Track: `hivemind-core#74 <https://github.com/JarbasHiveMind/HiveMind-core/pull/74>`_
-        and `hivemind-websocket-client#88 <https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88>`_.
-        Tests using this helper should be marked ``@pytest.mark.xfail(strict=False)``.
-    """
+    """Assert that every node in *nodes* received *count* CASCADE messages (NODE-1 §5)."""
     errors: List[str] = []
     for node in nodes:
         matches = _find(node.recorder, HiveMessageType.CASCADE.value)
@@ -808,7 +854,7 @@ def assert_cascade_routed(
             )
     if errors:
         raise AssertionError(
-            "[PENDING] CASCADE not fully delivered (core#74 / ws#88):\n  "
+            "CASCADE not fully delivered:\n  "
             + "\n  ".join(errors)
         )
 

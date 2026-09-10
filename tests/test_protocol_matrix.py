@@ -7,12 +7,9 @@ the 13 HiveMessageType values.  They stand in for the CI build-tests path
 
 Ready types (core routing implemented):
   HANDSHAKE, HELLO, BUS, SHARED_BUS, BROADCAST, PROPAGATE,
-  ESCALATE, INTERCOM, BINARY
+  ESCALATE, INTERCOM, BINARY, QUERY, CASCADE, PING
 
 Pending types (xfail scaffolds, strict=False):
-  QUERY      — core#74 / ws#88
-  CASCADE    — core#74 / ws#88
-  PING       — core#74  (partial)
   RENDEZVOUS — ws#103
 
 Generic:
@@ -359,14 +356,30 @@ def test_binary_delivered():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PENDING — QUERY
+# QUERY — routed to the master and answered (NODE-1 §5)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    reason="QUERY routing pending: hivemind-core#74 / hivemind-websocket-client#88",
-    strict=False,
-)
 def test_query_routed():
+    """The QUERY reaches the master, and the master's answer round-trips
+    back to the satellite (NODE-1 §5.2)."""
+    b = single_satellite()
+    b.start_all()
+    try:
+        m = b.get_master("M0")
+        s = b.get_satellite("S0")
+        # MSG-1 §3: the payload of a QUERY is itself a HiveMessage
+        inner = HiveMessage(HiveMessageType.BUS,
+                            payload=Message("question:ask", {"utterance": "weather?"}))
+        s.send(HiveMessage(HiveMessageType.QUERY, payload=inner))
+        assert_query_routed(m, s, count=1)
+    finally:
+        b.stop_all()
+
+
+def test_bare_query_is_malformed():
+    """MSG-1 §4: the payload of a QUERY is itself a HiveMessage; a bare
+    OVOS Message is refused by the master as malformed, so no answer ever
+    reaches the satellite."""
     b = single_satellite()
     b.start_all()
     try:
@@ -374,19 +387,16 @@ def test_query_routed():
         s = b.get_satellite("S0")
         s.send(HiveMessage(HiveMessageType.QUERY,
                            payload=Message("question:ask", {"utterance": "weather?"})))
-        assert_query_routed(m, count=1)
+        with pytest.raises(AssertionError, match="answer never reached"):
+            assert_query_routed(m, s, count=1, timeout=0.5)
     finally:
         b.stop_all()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PENDING — CASCADE
+# CASCADE — fanned out to every satellite (NODE-1 §5)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    reason="CASCADE routing pending: hivemind-core#74 / hivemind-websocket-client#88",
-    strict=False,
-)
 def test_cascade_routed():
     b = three_satellites()
     b.start_all()
@@ -395,7 +405,10 @@ def test_cascade_routed():
         s0 = b.get_satellite("S0")
         s1 = b.get_satellite("S1")
         s2 = b.get_satellite("S2")
-        s0.send(HiveMessage(HiveMessageType.CASCADE, payload=Message("network:ping", {})))
+        # MSG-1 §3: the payload of a CASCADE is itself a HiveMessage; a bare
+        # OVOS Message is refused by the master as malformed
+        inner = HiveMessage(HiveMessageType.BUS, payload=Message("network:ping", {}))
+        s0.send(HiveMessage(HiveMessageType.CASCADE, payload=inner))
         assert_cascade_routed(m, s1, s2, count=1)
     finally:
         b.stop_all()

@@ -14,7 +14,8 @@ from hivescope.assertions import assert_query_routed
 
 
 def test_query_reaches_master():
-    """A QUERY sent by a satellite should be escalated to master and stop there."""
+    """A QUERY sent by a satellite reaches master, and master's answer
+    round-trips back to the satellite."""
     b = single_satellite()
     b.start_all()
     try:
@@ -28,6 +29,6 @@ def test_query_reaches_master():
                 Message("question:ask", {"utterance": "what is the weather?"})),
         ))
 
-        assert_query_routed(m, count=1)
+        assert_query_routed(m, s, count=1)
     finally:
         b.stop_all()
