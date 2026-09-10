@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.5a2](https://github.com/JarbasHiveMind/hivescope/tree/0.8.5a2) (2026-09-10)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.5a1...0.8.5a2)
+
+**Merged pull requests:**
+
+- test: QUERY and CASCADE routing are implemented, so the tests assert them [\#74](https://github.com/JarbasHiveMind/hivescope/pull/74) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.8.5a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.5a1) (2026-09-09)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.4a3...0.8.5a1)
