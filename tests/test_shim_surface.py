@@ -29,6 +29,8 @@ REQUIRED_ATTRS = {
     "site_id",
     "useragent",
     "password",
+    # the scope of the cached Noise PSK (hivemind-websocket-client #226)
+    "key",
 }
 
 
@@ -52,6 +54,13 @@ def test_the_password_is_the_one_the_link_uses(shim):
     shim.identity.password = "link-password"
 
     assert shim.password == "link-password"
+
+
+def test_the_key_is_the_access_key_the_link_uses(shim):
+    """The protocol scopes the cached Noise PSK by this value, so it has to be
+    the access key the satellite authenticates with, not a placeholder."""
+    assert shim.key == shim.identity.access_key
+    assert shim.key
 
 
 def test_a_satellite_without_a_password_reports_none_rather_than_raising(shim):
