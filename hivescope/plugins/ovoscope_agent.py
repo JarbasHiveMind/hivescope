@@ -80,10 +80,32 @@ class _HarnessCaptureSession:
             ignore_messages=ignore_messages or DEFAULT_IGNORED,
         )
 
+        #: True when the last :meth:`wait` returned because of the timeout and
+        #: not because the EOF message arrived. A capture that timed out is
+        #: usually truncated, so assertions on it can be misleading.
+        self.timed_out: bool = False
+
     def wait(self, timeout: float = 10.0) -> List[Message]:
-        """Block until EOF message received or timeout, then return messages."""
-        self._cap.done.wait(timeout=timeout)
+        """Block until the EOF message arrives or *timeout* lapses.
+
+        Sets :attr:`timed_out` so the caller can tell a complete capture from
+        a truncated one. Discarding this made a timed-out capture look like a
+        clean short answer.
+        """
+        self.timed_out = not self._cap.done.wait(timeout=timeout)
+        if self.timed_out:
+            LOG.warning(
+                "hivescope capture timed out after %ss without the EOF "
+                "message; the returned message list may be truncated", timeout)
         return self._cap.finish()
+
+    def assert_complete(self) -> None:
+        """Raise if the last :meth:`wait` ended on the timeout."""
+        assert not self.timed_out, (
+            "capture session timed out before the EOF message arrived; "
+            f"collected {len(self._cap.responses)} message(s): "
+            f"{[m.msg_type for m in self._cap.responses]}"
+        )
 
     def messages(self) -> List[Message]:
         """Return messages collected so far without stopping the capture."""
@@ -176,18 +198,30 @@ class OvoscopeAgentProtocol(TestAgentProtocol):
         timeout: float = 10.0,
     ):
         """
-        Poll until ``msg_type`` has been emitted ``count`` times (or timeout).
-        Raises AssertionError if the count is not reached within ``timeout`` seconds.
+        Poll until ``msg_type`` has been emitted **at least** ``count`` times.
+
+        The bar is "at least", both while polling and at the deadline. The old
+        code polled on ``>=`` but fell back to an exact ``==`` check, so a test
+        that got more messages than it asked for passed when it was fast and
+        failed when it was slow.
+
+        Raises:
+            AssertionError: Fewer than ``count`` messages within ``timeout``.
         """
         import time
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        while True:
             matches = [m for m in self.injected if m.msg_type == msg_type]
             if len(matches) >= count:
                 return
+            if time.monotonic() >= deadline:
+                break
             time.sleep(0.05)
-        # Final check with proper error message
-        self.assert_injected(msg_type, count=count)
+        raise AssertionError(
+            f"Expected at least {count}x '{msg_type}' on the skill bus within "
+            f"{timeout}s, got {len(matches)}. "
+            f"All emitted: {[m.msg_type for m in self.injected]}"
+        )
 
     def wait_last_injected(
         self,
@@ -242,7 +276,14 @@ class OvoscopeAgentProtocol(TestAgentProtocol):
     # ------------------------------------------------------------------
 
     def shutdown(self):
-        """Stop MiniCroft and release resources."""
+        """Undo the bus wiring, then stop MiniCroft and release resources.
+
+        ``__post_init__`` wraps ``bus.emit`` and installs two bus handlers on
+        MiniCroft's bus. A MiniCroft can outlive this protocol (the caller may
+        pass their own), so those must come off first — otherwise the next
+        protocol on the same bus routes through this dead one.
+        """
+        super().shutdown()
         if self.minicroft is not None:
             try:
                 self.minicroft.stop()

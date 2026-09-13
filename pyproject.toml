@@ -7,7 +7,7 @@ name = "hivescope"
 dynamic = ["version"]
 description = "Hivescope: E2E testing library for HiveMind protocol"
 readme = "README.md"
-license = {text = "AGPL-3.0"}
+license = "Apache-2.0"
 authors = [
     {name = "JarbasAi", email = "jarbasai@mailfence.com"}
 ]
@@ -15,7 +15,6 @@ keywords = ["hivemind", "protocol", "testing", "e2e", "pytest"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -23,17 +22,33 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
-    "hivemind-bus-client>=0.7.0a2",
-    "hivemind-core>=4.0",
+    "hivemind-bus-client>=0.9.2a1",
+    # 2.x prerelease floors: a stable >=4.0 / >=0.7 floor resolves to hivemind-core
+    # 4.0.0 + old ovos-bus-client under a plain `pip install`, forcing every
+    # hivescope consumer to floor the whole 2.x stack themselves. Flooring the 2.x
+    # line here (incl. ovos-bus-client, whose 2.x is prerelease-only — a direct
+    # prerelease specifier is needed to enable it) lets consumers get the right
+    # stack from just `hivescope>=0.5.1a1`.
+    "hivemind-core>=4.6.2a1,<6.0.0",
+    "ovos-bus-client>=2.0.0a3,<3.0.0",
     "ovos-utils>=0.0.40",
     "pytest>=7.4",
     "websockets>=11",
+    # DROPPABLE once hivemind-websocket-protocol releases with its dev-branch
+    # unpinned pyOpenSSL: the released wheel pins pyopenssl==22.0.0, whose
+    # loose floor lets cryptography float to >=42 where the bindings that
+    # pyOpenSSL 22 needs (e.g. GEN_EMAIL) no longer exist.
+    "cryptography<51",
 ]
 
 [project.optional-dependencies]
 ovos = [
     "ovoscope>=0.13",
     "ovos-core>=0.0.30",
+]
+plot = [
+    "matplotlib",
+    "networkx",
 ]
 
 [tool.pytest.ini_options]
@@ -48,3 +63,6 @@ version = {attr = "hivescope.version.__version__"}
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["hivescope*"]
+
+[project.entry-points.pytest11]
+hivescope_xdg_isolation = "hivescope.xdg_isolation"

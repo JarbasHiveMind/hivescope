@@ -2,19 +2,19 @@
 Hivescope self-tests — protocol-matrix coverage.
 
 These tests verify hivescope's own assertion helpers and templates against
-the 14 HiveMessageType values.  They stand in for the CI build-tests path
+the 13 HiveMessageType values.  They stand in for the CI build-tests path
 (`test_path: 'tests'`) and catch regressions in the library itself.
 
 Ready types (core routing implemented):
   HANDSHAKE, HELLO, BUS, SHARED_BUS, BROADCAST, PROPAGATE,
-  ESCALATE, INTERCOM, BINARY
+  ESCALATE, INTERCOM, BINARY, QUERY, CASCADE, PING
 
 Pending types (xfail scaffolds, strict=False):
-  QUERY      — core#74 / ws#88
-  CASCADE    — core#74 / ws#88
-  PING       — core#74  (partial)
   RENDEZVOUS — ws#103
-  THIRDPRTY  — verify status
+
+Generic:
+  assert_passthrough_message_delivered — unhandled/user-land message types
+  traverse the mesh untouched (e.g. RENDEZVOUS)
 
 ACL enforcement:
   assert_acl_enforced / assert_broadcast_blocked
@@ -63,7 +63,7 @@ from hivescope.assertions import (
     assert_cascade_routed,
     assert_ping_responded,
     assert_rendezvous_handled,
-    assert_thirdparty_passed,
+    assert_passthrough_message_delivered,
 )
 from hivescope.assertions import assert_policy_denied, assert_session_blacklists_injected
 from hivescope.scenarios import single_satellite, three_satellites, with_relay
@@ -81,12 +81,17 @@ def test_public_api_importable():
 
 
 def test_recorder_messages_alias():
-    """MessageRecorder.messages is an alias for .records."""
+    """MessageRecorder.messages returns a snapshot of .records."""
     from hivescope.recorder import MessageRecorder
     r = MessageRecorder("test")
     r.record("in", "bus", {}, "peer1")
-    assert r.messages is r.records
-    assert len(r.messages) == 1
+    assert r.messages == r.records
+    # A snapshot, not the live list: appending later must not mutate it.
+    assert r.messages is not r.records
+    snap = r.messages
+    r.record("in", "bus", {}, "peer2")
+    assert len(snap) == 1
+    assert len(r.messages) == 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -351,14 +356,30 @@ def test_binary_delivered():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PENDING — QUERY
+# QUERY — routed to the master and answered (NODE-1 §5)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    reason="QUERY routing pending: hivemind-core#74 / hivemind-websocket-client#88",
-    strict=False,
-)
 def test_query_routed():
+    """The QUERY reaches the master, and the master's answer round-trips
+    back to the satellite (NODE-1 §5.2)."""
+    b = single_satellite()
+    b.start_all()
+    try:
+        m = b.get_master("M0")
+        s = b.get_satellite("S0")
+        # MSG-1 §3: the payload of a QUERY is itself a HiveMessage
+        inner = HiveMessage(HiveMessageType.BUS,
+                            payload=Message("question:ask", {"utterance": "weather?"}))
+        s.send(HiveMessage(HiveMessageType.QUERY, payload=inner))
+        assert_query_routed(m, s, count=1)
+    finally:
+        b.stop_all()
+
+
+def test_bare_query_is_malformed():
+    """MSG-1 §4: the payload of a QUERY is itself a HiveMessage; a bare
+    OVOS Message is refused by the master as malformed, so no answer ever
+    reaches the satellite."""
     b = single_satellite()
     b.start_all()
     try:
@@ -366,19 +387,16 @@ def test_query_routed():
         s = b.get_satellite("S0")
         s.send(HiveMessage(HiveMessageType.QUERY,
                            payload=Message("question:ask", {"utterance": "weather?"})))
-        assert_query_routed(m, count=1)
+        with pytest.raises(AssertionError, match="answer never reached"):
+            assert_query_routed(m, s, count=1, timeout=0.5)
     finally:
         b.stop_all()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PENDING — CASCADE
+# CASCADE — fanned out to every satellite (NODE-1 §5)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    reason="CASCADE routing pending: hivemind-core#74 / hivemind-websocket-client#88",
-    strict=False,
-)
 def test_cascade_routed():
     b = three_satellites()
     b.start_all()
@@ -387,28 +405,54 @@ def test_cascade_routed():
         s0 = b.get_satellite("S0")
         s1 = b.get_satellite("S1")
         s2 = b.get_satellite("S2")
-        s0.send(HiveMessage(HiveMessageType.CASCADE, payload=Message("network:ping", {})))
+        # MSG-1 §3: the payload of a CASCADE is itself a HiveMessage; a bare
+        # OVOS Message is refused by the master as malformed
+        inner = HiveMessage(HiveMessageType.BUS, payload=Message("network:ping", {}))
+        s0.send(HiveMessage(HiveMessageType.CASCADE, payload=inner))
         assert_cascade_routed(m, s1, s2, count=1)
     finally:
         b.stop_all()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PENDING — PING
+# PING — flood discovery, answered with a responsive PING
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    reason="PING full round-trip pending: hivemind-core#74",
-    strict=False,
-)
 def test_ping_responded():
+    """A PING flood is answered with the node's own PING, same flood_id.
+
+    The PING must travel inside a PROPAGATE: hivemind-core reaches
+    handle_ping_message only from handle_propagate_message.
+    """
+    import uuid
+
+    b = single_satellite()
+    b.start_all()
+    try:
+        m = b.get_master("M0")
+        s = b.get_satellite("S0")
+        inner = HiveMessage(HiveMessageType.PING, {
+            "flood_id": uuid.uuid4().hex,
+            "peer": s.peer,
+            "site_id": s.identity.site_id,
+            "timestamp": 0,
+        })
+        s.send(HiveMessage(HiveMessageType.PROPAGATE, payload=inner))
+        assert_ping_responded(m, s)
+    finally:
+        b.stop_all()
+
+
+def test_bare_ping_is_not_routed():
+    """A PING sent without a PROPAGATE wrapper gets no response."""
     b = single_satellite()
     b.start_all()
     try:
         m = b.get_master("M0")
         s = b.get_satellite("S0")
         s.send(HiveMessage(HiveMessageType.PING, payload={}))
-        assert_ping_responded(m, s)
+        with pytest.raises(AssertionError, match="round-trip incomplete"):
+            assert_ping_responded(m, s, timeout=0.5)
     finally:
         b.stop_all()
 
@@ -417,10 +461,6 @@ def test_ping_responded():
 # PENDING — RENDEZVOUS
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    reason="RENDEZVOUS routing pending: hivemind-websocket-client#103",
-    strict=False,
-)
 def test_rendezvous_handled():
     b = single_satellite()
     b.start_all()
@@ -434,20 +474,18 @@ def test_rendezvous_handled():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# THIRDPRTY (verify passthrough)
+# Generic passthrough (unhandled message type traverses the mesh untouched)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    reason="THIRDPRTY passthrough not yet verified in core routing",
-    strict=False,
-)
-def test_thirdparty_passed():
+def test_passthrough_message_delivered():
     b = single_satellite()
     b.start_all()
     try:
         m = b.get_master("M0")
         s = b.get_satellite("S0")
-        s.send(HiveMessage(HiveMessageType.THIRDPRTY, payload={"custom": "payload"}))
-        assert_thirdparty_passed(m, count=1, direction="in")
+        s.send(HiveMessage(HiveMessageType.RENDEZVOUS, payload={"custom": "payload"}))
+        assert_passthrough_message_delivered(
+            m, HiveMessageType.RENDEZVOUS, count=1, direction="in"
+        )
     finally:
         b.stop_all()

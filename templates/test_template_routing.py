@@ -23,6 +23,6 @@ def test_bus_message_reaches_master():
             payload=Message("speak", {"utterance": "hello"}),
         ))
 
-        assert_message_routed(m, "BUS", count=1, direction="inbound")
+        assert_message_routed(m, HiveMessageType.BUS.value, count=1, direction="in")
     finally:
         b.stop_all()
