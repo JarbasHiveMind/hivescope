@@ -4,6 +4,7 @@ Every test here fails against the pre-fix harness: each one pins a defect in
 the topology contract, the recorder, the client database, the loopback
 lifecycle, or the assertion helpers.
 """
+import asyncio
 import os
 import socket
 import threading
@@ -510,3 +511,63 @@ def test_a_direct_connection_send_that_provokes_a_reply_returns():
         assert done.wait(15), "send() never returned: the reply deadlocked on the send lock"
     finally:
         b.stop_all()
+
+
+def test_stop_all_shuts_the_listener_down():
+    """A dropped topology must not leave the listener's PSK workers parked.
+
+    The listener derives argon2id PSKs on a lazily created thread pool whose
+    workers hold no reference back to it, so a suite that builds and drops a
+    topology per test gains two threads each time. A harness that checks for
+    lingering threads at teardown then fails whichever test ran last.
+    """
+    b = scenarios.single_satellite()
+    b.start_all()
+    master = b.get_master("M0")
+    proto = master.hm_protocol
+    # The stop_all() call is duck-typed on purpose, so this repository builds
+    # against a hivemind-core that has no shutdown() — the released one, until
+    # JarbasHiveMind/HiveMind-core#349 ships. There is nothing to assert then;
+    # test_stop_all_tolerates_a_listener_without_shutdown covers that case.
+    if not hasattr(proto, "shutdown") or not hasattr(proto, "_derive_noise_psk_async"):
+        b.stop_all()
+        pytest.skip("this hivemind-core has no listener shutdown()")
+
+    async def _derive():
+        # force the pool into existence the way a first handshake would
+        await proto._derive_noise_psk_async("a-password-for-the-pool", None)
+
+    try:
+        asyncio.run(_derive())
+    finally:
+        b.stop_all()
+
+    assert getattr(proto, "_noise_psk_executor", None) is None
+    for _ in range(100):
+        lingering = [t for t in threading.enumerate()
+                     if t.name.startswith("noise-psk") and t.is_alive()]
+        if not lingering:
+            break
+        time.sleep(0.05)
+    assert not lingering, f"workers outlived stop_all(): {[t.name for t in lingering]}"
+
+
+def test_stop_all_tolerates_a_listener_without_shutdown():
+    """A hivemind-core older than the shutdown method must still stop cleanly."""
+    b = scenarios.single_satellite()
+    b.start_all()
+    master = b.get_master("M0")
+
+    class _NoShutdown:
+        """Everything the stop path touches, minus shutdown()."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def __getattr__(self, name):
+            if name == "shutdown":
+                raise AttributeError(name)
+            return getattr(self._real, name)
+
+    master.hm_protocol = _NoShutdown(master.hm_protocol)
+    b.stop_all()  # must not raise
