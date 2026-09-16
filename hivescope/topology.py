@@ -257,6 +257,20 @@ class TopologyBuilder:
             except Exception as exc:
                 log.warning("stop_all: agent protocol shutdown of %r failed: %s",
                             master.name, exc)
+            # The listener owns a lazily created thread pool for argon2id PSK
+            # derivation. Its workers hold no reference back to the listener,
+            # so a topology that is built and dropped per test leaves two
+            # parked threads behind each time, and a harness that checks for
+            # lingering threads at teardown fails the test that ran last.
+            # Duck-typed like the agent protocol above: a listener from a
+            # hivemind-core without the method is left as it is.
+            try:
+                shutdown = getattr(master.hm_protocol, "shutdown", None)
+                if callable(shutdown):
+                    shutdown()
+            except Exception as exc:
+                log.warning("stop_all: listener shutdown of %r failed: %s",
+                            master.name, exc)
             master.cleanup()
 
     # --- accessors ---
