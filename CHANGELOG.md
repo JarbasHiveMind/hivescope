@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.7a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.7a1) (2026-09-16)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.6a1...0.8.7a1)
+
+**Merged pull requests:**
+
+- fix: shut the listener down in stop\_all [\#81](https://github.com/JarbasHiveMind/hivescope/pull/81) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.8.6a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.6a1) (2026-09-13)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.5a2...0.8.6a1)
