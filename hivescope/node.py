@@ -453,9 +453,65 @@ class SatelliteNode:
         return self.shim.handshake_event.wait(timeout=timeout)
 
     def disconnect(self):
-        """Disconnect from the master."""
+        """Disconnect from the master, and forget this session's crypto state.
+
+        A real client drops its protocol state with the socket: the next
+        connection builds a fresh ``NoiseTransport`` and runs a fresh
+        handshake. The shim stands in for that client, so it has to do the
+        same, and it did not: ``shim.noise_transport``,
+        ``shim.handshake_event`` and the slave protocol's
+        ``_noise_established`` all survived a disconnect. A reconnect then ran
+        a new handshake -- KKpsk0, since the server key is pinned -- and
+        decoded the new session's first transport message with the PREVIOUS
+        session's transport, which fails AEAD authentication
+        ("Failed authentication of message", or "non-Noise message received on
+        a protocol v3 session" depending on which side spoke first). A real hub
+        reconnects with KKpsk0 correctly (T-1177), so this was the shim's
+        state, not the client's KK path.
+
+        What is deliberately NOT cleared is the pinned server key. KKpsk0 is
+        only reachable BECAUSE the key stays pinned, and hivemind-crypto-1
+        §3.5 requires the pin to hold across handshakes. A caller that clears
+        the pin to make a reconnect work is testing XXpsk2 twice.
+        """
         if self._connection and self._master:
             self._master.hm_protocol.handle_client_disconnected(self._connection)
+        self._forget_session()
+
+    def _forget_session(self) -> None:
+        """Drop everything that belongs to one connection, keeping identity.
+
+        Idempotent: a second disconnect, or a disconnect on a node that never
+        connected, must not raise.
+        """
+        self._connection = None
+        self.shim.noise_transport = None
+        self.shim.crypto_key = None
+        self.shim.handshake_event.clear()
+        # The client library already owns the list of what a new connection
+        # must forget -- the Noise pattern and handshake, the RSA handshake,
+        # the legacy-handshake flag, and the server's HELLO and HANDSHAKE
+        # payloads. Those last two matter most here: HIVEMIND-CRYPTO-1 §3.4.3
+        # binds both into the Noise prologue, so a second connection that
+        # still held the first connection's payloads built a prologue the
+        # master did not, and the master could not authenticate KK message 1
+        # ("handshake failure: " with an empty reason -- a noiseprotocol
+        # exception carries no message). Calling the library's own
+        # reset_connection_state is what a real client does when the socket
+        # goes; guessing a subset of its attributes here would drift the day
+        # it learns a new one.
+        proto = self.slave_protocol
+        reset = getattr(proto, "reset_connection_state", None)
+        if callable(reset):
+            reset()
+        else:  # pragma: no cover - vintages before the method existed
+            for attr, value in (("_noise_established", False),
+                                ("noise_handshake", None),
+                                ("_noise_pattern", None),
+                                ("_server_hello_payload", None),
+                                ("_server_handshake_payload", None)):
+                if hasattr(proto, attr):
+                    setattr(proto, attr, value)
 
     def cleanup(self):
         """Release the temp files this node's identity created."""
@@ -488,24 +544,75 @@ class SatelliteNode:
         Called by HiveMindClientConnection.send_msg when master sends downstream.
         Decodes, records, then dispatches through the slave protocol's handlers.
         """
-        if self._connection is None:
+        # Bind the connection ONCE. A disconnect, or a reconnect that swaps in
+        # a new connection, can null ``self._connection`` while this call is
+        # still on the stack -- the master's own frame is what triggers the
+        # dispatch that closes it -- and re-reading the attribute in the
+        # ``finally`` below then raised
+        # ``AttributeError: 'NoneType' object has no attribute
+        # 'noise_transport'`` on top of whatever really went wrong, replacing
+        # the real error with a teardown error.
+        connection = self._connection
+        if connection is None:
             # Connection not yet established (shouldn't normally happen)
             return
 
-        peer = self._connection.peer
+        peer = connection.peer
 
-        # self._connection is the master's HiveMindClientConnection, shared
+        # Decode in the pump, not here.
+        #
+        # A frame's decode can depend on the PREVIOUS frame's handler having
+        # run. Decoding straight away while deferring only the dispatch broke
+        # that: the master's Noise HANDSHAKE message and the first transport
+        # message it sends afterwards were both decoded before the handler for
+        # the handshake message had established the satellite's transport, so
+        # the transport frame was decoded with no client transport to borrow
+        # and failed AEAD authentication ("Failed authentication of message").
+        #
+        # XXpsk2 never showed it: the initiator's session opens on Noise
+        # message 2, so the master -- which opens on message 3 -- cannot send a
+        # transport frame before the client is ready. KKpsk0 has two messages
+        # and the RESPONDER opens first, so its first transport frame can and
+        # does overtake the client's own completion. That asymmetry is why a
+        # reconnect (KKpsk0, the server key being pinned) failed in-process
+        # while a real hub reconnects fine (T-1177): a socket cannot deliver
+        # frame two into the middle of frame one's handler either, which is
+        # exactly the property the pump exists to model.
+        #
+        # Deferring the decode keeps FIFO order and makes each frame see the
+        # state the frames before it left behind.
+        _deliver(lambda: self._decode_and_dispatch(connection, peer, payload))
+
+    def _decode_and_dispatch(self, connection, peer, payload) -> None:
+        """Decode one frame and dispatch it, both inside the pump.
+
+        ``connection`` is passed in rather than re-read: by the time the pump
+        reaches this frame the satellite may have reconnected or disconnected,
+        and this frame belongs to the connection that delivered it.
+        """
+        # The connection is the master's HiveMindClientConnection, shared
         # in-process for framing/session bookkeeping; it carries the master's
         # own Noise transport (the responder's cipher states), not the
         # satellite's (the initiator's). Decrypting a v3 session with the
         # wrong side's transport always fails AEAD authentication, so decode
         # borrows the satellite's own transport for the duration of the call.
+        # Mirror the satellite's OWN crypto state onto the shared connection
+        # for the duration of the decode, including the case where the
+        # satellite has no transport yet.
+        #
+        # Swapping only when the satellite HAS one left the master's state in
+        # place otherwise, and in KKpsk0 the two views diverge by exactly one
+        # message: the master installs its transport after Noise message 1,
+        # while the satellite is still mid-handshake waiting for message 2.
+        # Message 2 is cleartext, but the master's connection already believed
+        # the session was encrypted, so decode refused it as a "non-Noise
+        # message received on a protocol v3 session". Assigning None mirrors
+        # "not established yet", which is what the satellite actually is.
         client_transport = getattr(self.shim, "noise_transport", None)
-        saved_transport = self._connection.noise_transport
-        if client_transport is not None:
-            self._connection.noise_transport = client_transport
+        saved_transport = connection.noise_transport
+        connection.noise_transport = client_transport
         try:
-            message = self._connection.decode(payload)
+            message = connection.decode(payload)
         except Exception as exc:
             log.exception("[%s] _receive_raw decode error: %s", self.name, exc)
             # Record the failure so a test waiting on a message fails fast with
@@ -513,16 +620,15 @@ class SatelliteNode:
             self.recorder.record("in", "_decode_error", {"error": str(exc)}, peer)
             return
         finally:
-            self._connection.noise_transport = saved_transport
+            connection.noise_transport = saved_transport
 
         self.recorder.record("in", message.msg_type, message._payload, peer)
 
-        # Dispatch through the slave protocol's registered handlers. raw_send
-        # reaches here from inside NoiseTransport.send_message, so this must not
-        # run a handler synchronously (the handler's own outbound send would
-        # re-enter the held _send_lock); _deliver enqueues it behind the send
-        # in progress and it runs once that send has returned.
-        _deliver(lambda: self.shim.emitter.emit(message.msg_type, message))
+        # Already inside the pump (see _receive_raw), so the handler runs here
+        # directly: the wire-send that delivered this frame has returned and
+        # released NoiseTransport's _send_lock, which is what the pump
+        # guarantees.
+        self.shim.emitter.emit(message.msg_type, message)
 
     def _on_disconnect(self, code: int = 1000, reason: str = ""):
         conn = self._connection
@@ -615,13 +721,41 @@ def _instrument_master(hm_proto: HiveMindListenerProtocol,
 
         # A test that calls the connection's send() directly starts no drain,
         # so the delivery it triggers would run inside the Noise _send_lock
-        # and a handler that replies on the same connection would deadlock
-        # on it. Route send() through the pump so the drain begins before the
-        # lock is taken and the reply is delivered after send() returns.
+        # and a handler that replies on the same connection would deadlock on
+        # it. The send therefore needs a drain rooted around it -- but it must
+        # not itself be QUEUED, which is what a bare ``_deliver(send)`` did.
+        #
+        # Encoding reads the master's state at the moment the frame is
+        # written. Queueing the send moved that read AFTER whatever the caller
+        # did next. In the KKpsk0 handshake the caller is hivemind-core's
+        # ``receive_noise_handshake``: it sends Noise message 2, which must go
+        # out in CLEARTEXT, and only then calls ``_finish_noise_handshake``,
+        # which installs ``client.noise_transport``. With the send queued, the
+        # transport was already installed when the queued send finally ran, so
+        # message 2 went out ENCRYPTED and the satellite -- still mid-handshake
+        # and with no transport yet -- rejected it with "Failed authentication
+        # of message". XXpsk2 never showed it: there the master finishes on
+        # message 3 and sends no handshake frame afterwards.
+        #
+        # So: root the drain, then send inline. The receive side
+        # (``_receive_raw``) is what defers, which is where the re-entrancy
+        # actually has to be broken, and it keeps the lock free for the
+        # handler.
         _orig_send = client.send
 
         def _pumped_send(*args, **kwargs):
-            _deliver(lambda: _orig_send(*args, **kwargs))
+            if getattr(_pump, "draining", False):
+                # already rooted: the frames this send triggers will queue
+                return _orig_send(*args, **kwargs)
+            _pump.draining = True
+            try:
+                result = _orig_send(*args, **kwargs)
+                queue = getattr(_pump, "queue", None)
+                while queue:
+                    queue.popleft()()
+                return result
+            finally:
+                _pump.draining = False
 
         client.send = _pumped_send
         _orig_new_client(client)
