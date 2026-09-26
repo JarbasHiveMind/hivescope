@@ -323,6 +323,42 @@ class LoopbackNetworkProtocol(NetworkProtocol):
         db_client = self.hm_protocol.db.get_client_by_api_key(key)
         if db_client is None:
             _LOG.warning(f"Client key '{key}' not found in database")
+            # Production does not simply close. The reference WebSocket
+            # binding builds the connection object first and then calls
+            # `self.hm_protocol.handle_invalid_key_connected(self.client)`
+            # before it closes, and that call is what records the rejection
+            # in the bounded `recent_rejections` ring, fires `on_invalid_key`
+            # on the protocol, the binary protocol and the agent protocol,
+            # and emits `hive.client.connection.error`.
+            #
+            # This hub is the test double for that binding, so a harness
+            # driving it has to see the same effects. Without this call a
+            # suite could not test an `on_invalid_key` handler or a
+            # rejection-ring assertion at all: the hub closed the socket and
+            # returned, and every one of those observations was silently
+            # empty.
+            #
+            # The refused connection is deliberately NOT added to
+            # `self._clients`: it is refused, it never registers with the
+            # protocol, and the binding does not register it either. The
+            # send and disconnect callbacks are inert because the socket is
+            # closed on the next line; nothing may be written to a peer
+            # whose key was refused.
+            refused = HiveMindClientConnection(
+                key=key,
+                name=name,
+                send_msg=lambda payload, is_bin=False: None,
+                disconnect=lambda code=1008, reason="": None,
+                sess=Session(session_id="default"),
+                hm_protocol=self.hm_protocol,
+                node_type=HiveMindNodeType.NODE,
+            )
+            try:
+                self.hm_protocol.handle_invalid_key_connected(refused)
+            except Exception:
+                # A callback of the harness under test must not stop the
+                # refusal: the close below is the part the satellite sees.
+                _LOG.exception("error in the invalid-key path")
             await websocket.close(code=4001, reason="Invalid API key")
             return
 
