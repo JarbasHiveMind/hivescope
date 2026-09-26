@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.7a2](https://github.com/JarbasHiveMind/hivescope/tree/0.8.7a2) (2026-09-26)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.7a1...0.8.7a2)
+
+**Merged pull requests:**
+
+- test: build the bare-query frame without the Message branch [\#86](https://github.com/JarbasHiveMind/hivescope/pull/86) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.8.7a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.7a1) (2026-09-16)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.6a1...0.8.7a1)
