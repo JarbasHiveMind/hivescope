@@ -491,7 +491,7 @@ class SatelliteNode:
         # The client library already owns the list of what a new connection
         # must forget -- the Noise pattern and handshake, the RSA handshake,
         # the legacy-handshake flag, and the server's HELLO and HANDSHAKE
-        # payloads. Those last two matter most here: HIVEMIND-CRYPTO-1 §3.4.3
+        # payloads. Those last two matter most here: HIVEMIND-CRYPTO-1 §3.3
         # binds both into the Noise prologue, so a second connection that
         # still held the first connection's payloads built a prologue the
         # master did not, and the master could not authenticate KK message 1
@@ -641,6 +641,14 @@ class SatelliteNode:
         # call arrives, _connection/_master are already None so the guard is False).
         if conn and master and conn.peer in master.hm_protocol.clients:
             master.hm_protocol.handle_client_disconnected(conn)
+        # A master-initiated close ends the session exactly as ``disconnect``
+        # does, so it has to forget the same state. It did not: the shim kept
+        # ``noise_transport``, ``handshake_event`` and the slave protocol's
+        # handshake state, so the next ``connect`` saw a handshake that looked
+        # complete, skipped the new one, and stayed on XXpsk2 with the previous
+        # session's transport. ``_forget_session`` is idempotent, so the
+        # re-entrant second call above costs nothing.
+        self._forget_session()
 
     # --- waiting / assertion ---
 

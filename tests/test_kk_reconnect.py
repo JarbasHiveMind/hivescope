@@ -12,7 +12,7 @@ asymmetry. Each cell below fails on one of them:
    slave protocol's handshake state behind, so the reconnect decoded a new
    session with the previous session's transport;
 2. the server's ``HELLO`` and ``HANDSHAKE`` payloads were kept too, and
-   HIVEMIND-CRYPTO-1 §3.4.3 binds both into the Noise prologue, so the second
+   HIVEMIND-CRYPTO-1 §3.3 binds both into the Noise prologue, so the second
    handshake built a prologue the master did not;
 3. the master's ``send`` was queued by the delivery pump, so Noise message 2 --
    which must go out in cleartext -- was encoded after
@@ -79,7 +79,7 @@ def test_disconnect_forgets_the_session_but_keeps_the_pin(hub_and_satellite):
     assert not sat.shim.handshake_event.is_set()
     assert sat.slave_protocol._noise_established is False
     assert sat.slave_protocol._server_hello_payload is None, (
-        "the server HELLO survived the disconnect; §3.4.3 binds it into the "
+        "the server HELLO survived the disconnect; §3.3 binds it into the "
         "prologue, so the next handshake would build one the master did not")
     assert sat.slave_protocol._server_handshake_payload is None
 
@@ -139,3 +139,67 @@ def test_two_reconnects_in_a_row(hub_and_satellite):
         sat.send(Message("speak", {"utterance": f"round {round_number}"}))
         assert not _decode_errors(sat)[before:], (
             f"reconnect {round_number} could not carry a message")
+
+
+def test_master_initiated_close_forgets_the_session(hub_and_satellite):
+    """The master-initiated close has to forget what ``disconnect`` forgets.
+
+    ``_on_disconnect`` is the callback the network protocol wires in place of
+    the production WebSocket ``on_close``, so it is the path a satellite takes
+    when the master ends the session. It cleared ``_connection`` and
+    ``_master`` only: the shim kept ``noise_transport``, ``crypto_key``, the
+    set ``handshake_event`` and the slave protocol's handshake state.
+    """
+    _, sat = hub_and_satellite
+    assert sat.shim.noise_transport is not None
+
+    sat._on_disconnect(1000, "master closed")
+
+    assert sat.shim.noise_transport is None, (
+        "the previous session's transport survived a master-initiated close; "
+        "the next session would decode its first message with it")
+    assert sat.shim.crypto_key is None
+    assert not sat.shim.handshake_event.is_set(), (
+        "the handshake event stayed set, so the next connect() would read the "
+        "old handshake as this session's and never run a new one")
+    assert sat.slave_protocol._noise_established is False
+    assert sat.slave_protocol._server_hello_payload is None
+    assert sat.slave_protocol._server_handshake_payload is None
+
+
+def test_reconnect_after_master_initiated_close_negotiates_kkpsk0(hub_and_satellite):
+    """The consequence cell: the second session must be a real KKpsk0 session.
+
+    Without the fix this reconnect did not fail loudly. ``connect`` found
+    ``handshake_event`` already set, skipped the handshake, and the satellite
+    stayed on XXpsk2 with the first session's transport -- two
+    "non-Noise message received on a protocol v3 session" decode errors, and a
+    node whose ``_master`` was back to None. A pattern assertion is what makes
+    that visible.
+    """
+    master, sat = hub_and_satellite
+    sat._on_disconnect(1000, "master closed")
+    sat.connect(master)
+
+    assert sat._master is master, (
+        "the node lost its master across the reconnect")
+    assert sat.slave_protocol._noise_pattern == "KKpsk0", (
+        f"the reconnect negotiated "
+        f"{sat.slave_protocol._noise_pattern!r}, not KKpsk0: a fallback to "
+        f"XXpsk2 means the handshake state of the closed session was reused")
+
+    before = len(_decode_errors(sat))
+    sat.send(Message("speak", {"utterance": "after the master closed"}))
+    errors = _decode_errors(sat)[before:]
+    assert not errors, (
+        f"the KKpsk0 session that followed a master-initiated close could not "
+        f"carry a message: {errors}")
+
+
+def test_on_disconnect_is_idempotent(hub_and_satellite):
+    """Re-entry is the normal case on this path: ``handle_client_disconnected``
+    calls the client's own disconnect at the end. A second call must not
+    raise, and must not raise on a node that never connected either."""
+    _, sat = hub_and_satellite
+    sat._on_disconnect(1000, "master closed")
+    sat._on_disconnect(1000, "master closed")
