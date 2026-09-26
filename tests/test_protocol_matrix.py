@@ -385,8 +385,17 @@ def test_bare_query_is_malformed():
     try:
         m = b.get_master("M0")
         s = b.get_satellite("S0")
+        # The illegal frame is built as the DICT the constructor would have
+        # written, not by handing the constructor a Message. Wrapping a
+        # Layer-1 Message in a routing type is the sender defect T-5167
+        # refuses in hivemind-websocket-client, so a harness that builds its
+        # illegal frame that way stops being able to build it at all. The
+        # frame on the wire is the same: {"type", "data", "context"} and no
+        # msg_type.
         s.send(HiveMessage(HiveMessageType.QUERY,
-                           payload=Message("question:ask", {"utterance": "weather?"})))
+                           payload={"type": "question:ask",
+                                    "data": {"utterance": "weather?"},
+                                    "context": {}}))
         with pytest.raises(AssertionError, match="answer never reached"):
             assert_query_routed(m, s, count=1, timeout=0.5)
     finally:
