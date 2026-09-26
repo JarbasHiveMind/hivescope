@@ -26,6 +26,8 @@ asymmetry. Each cell below fails on one of them:
 A real hub reconnects with ``KKpsk0`` correctly (T-1177), so none of this was
 the client's KK path.
 """
+import time
+
 import pytest
 from ovos_bus_client.message import Message
 
@@ -36,7 +38,10 @@ from hivescope.topology import TopologyBuilder
 def hub_and_satellite():
     topo = TopologyBuilder()
     master = topo.add_master("hub")
-    sat = topo.add_satellite("sat", master)
+    # allowed_types is what lets `speak` past MessageTypeACLPolicy at the
+    # master. Without it the delivery cell below can only see the absence of a
+    # decode error, which a message the master drops also satisfies.
+    sat = topo.add_satellite("sat", master, allowed_types=["speak"])
     topo.start_all()
     try:
         yield master, sat
@@ -46,6 +51,22 @@ def hub_and_satellite():
 
 def _decode_errors(sat):
     return [r for r in sat.recorder.records if r.msg_type == "_decode_error"]
+
+
+def _wait_for_utterance(master, utterance, timeout=5.0):
+    """Return True once `utterance` is on the master's agent bus.
+
+    Delivery is asynchronous: the master injects on the delivery pump, after
+    sat.send() returns. A poll is therefore the only honest read.
+    """
+    deadline = time.monotonic() + timeout
+    injected = master.hm_protocol.agent_protocol.injected
+    while time.monotonic() < deadline:
+        for msg in list(injected):
+            if msg.msg_type == "speak" and msg.data.get("utterance") == utterance:
+                return True
+        time.sleep(0.05)
+    return False
 
 
 def test_first_session_is_xxpsk2(hub_and_satellite):
@@ -101,7 +122,8 @@ def test_reconnect_negotiates_kkpsk0_and_delivers(hub_and_satellite):
     """The cell this module exists for.
 
     Reconnect, and assert three things: the pattern really was KKpsk0, no
-    decode failed, and a message sent on the second session arrived. The
+    decode failed, and a message sent on the second session reached the
+    master's agent bus with its value. The
     pattern assertion matters most -- without it a harness whose reconnect
     quietly fell back to XXpsk2 would look identical.
     """
@@ -123,6 +145,12 @@ def test_reconnect_negotiates_kkpsk0_and_delivers(hub_and_satellite):
     assert not errors, (
         f"the first transport message of the KKpsk0 session failed to decode: "
         f"{errors}")
+    # The value at the master, not the absence of an error: a message the
+    # master decodes and then drops records no decode error either.
+    assert _wait_for_utterance(master, "after the reconnect"), (
+        f"the KKpsk0 session decoded the message but the master never put it "
+        f"on the agent bus; injected: "
+        f"{[m.msg_type for m in master.hm_protocol.agent_protocol.injected]}")
 
 
 def test_two_reconnects_in_a_row(hub_and_satellite):
