@@ -42,6 +42,10 @@ def lock_holding_delivery(monkeypatch):
     monkeypatch.setattr(HiveMindClientConnection, "send", send)
 
 
+# 9 nodes and 40 re-floods cost 19s to 31s, by host load: the repository cap
+# of 30s is inside that range. The cap is here to catch a deadlock, not to
+# measure this cell, so this cell gets a cap of its own with room above it.
+@pytest.mark.timeout(120)
 def test_wide_fanout_flood_no_deadlock(lock_holding_delivery):
     """A large star where every peer re-floods the whole mesh terminates."""
     n = 8
