@@ -5,15 +5,17 @@ Records every Message injected into the 'OVOS bus' so tests can assert on it.
 
 Reverse routing
 ---------------
-In a live deployment the agent protocol (OVOSProtocol in ovos-bus-client/hpm.py)
-subscribes to the OVOS bus and routes outgoing messages back to the originating
-satellite by inspecting ``message.context["destination"]``.
+In a live deployment the agent protocol subscribes to the OVOS bus and routes a
+backend response back to the peer its ``message.context["destination"]`` names,
+subject to the response isolation of **HIVEMIND-AGENT-1 §3.2**.
 
-TestAgentProtocol replicates this behaviour verbatim so that test assertions
-against ``SatelliteNode.internal_bus`` match what a real satellite would receive.
+TestAgentProtocol routes on the same rules, so an assertion against
+``SatelliteNode.internal_bus`` reads what a satellite would receive from a
+conformant server. A harness that relayed a message §3.2 forbids would hand an
+isolation cell a pass the deployment does not earn.
 
-Reference: ovos-bus-client/ovos_bus_client/hpm.py — OVOSProtocol.register_bus_handlers(),
-           OVOSProtocol.handle_send(), OVOSProtocol.handle_internal_mycroft()
+Reference: hivemind-ovos-agent-plugin — OVOSAgentProtocol.register_bus_handlers(),
+           OVOSAgentProtocol.handle_send(), OVOSAgentProtocol.handle_internal_mycroft()
 """
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -207,22 +209,55 @@ class TestAgentProtocol(AgentProtocol):
                 )
 
     def handle_internal_mycroft(self, message: str) -> None:
-        """Forward OVOS bus messages to satellite clients when they are the destination.
+        """Deliver a backend response to the peers its ``destination`` names.
 
-        Exact port of OVOSProtocol.handle_internal_mycroft() from ovos-bus-client/hpm.py.
+        Port of ``OVOSAgentProtocol.handle_internal_mycroft()`` from
+        hivemind-ovos-agent-plugin, carrying its request guard.
 
         The ``message`` bus event carries the raw serialised JSON string (FakeBus
         emits ``ee.emit("message", message.serialize())``).  Client isolation is
-        enforced here: each satellite only receives messages whose ``destination``
-        context matches its peer ID.
+        enforced here: each satellite only receives responses whose
+        ``destination`` context matches its peer ID.
         """
         message = Message.deserialize(message)
         target_peers = message.context.get("destination") or []
         if not isinstance(target_peers, list):
             target_peers = [target_peers]
 
-        if target_peers:
-            for peer, client in self.clients.items():
+        # A REQUEST IS NEVER DELIVERED TO A PEER, whatever its destination says.
+        # HIVEMIND-BRIDGE-1 §3.1 makes the node stamp context["source"] with the
+        # peer id it minted for the connection a message arrived on, and those
+        # values MUST be distinct per peer. So a message whose source names a
+        # CONNECTED peer is that peer's own request travelling to the agent --
+        # never an answer to send to somebody. HIVEMIND-AGENT-1 §3.2 permits
+        # delivery of a RESPONSE to the peers its destination names, and a
+        # request is not a response.
+        #
+        # Without this test, anything that writes a peer id into destination
+        # after injection -- a transformer, a skill, any other bus writer -- has
+        # this relay deliver one peer's traffic to another peer's socket with
+        # source rewritten to "hive", which §3.2 forbids outright.
+        #
+        # source is normalised the same way as destination above, because a
+        # satellite's own slave protocol produces the list form: on an inbound
+        # BUS message it does context["source"] = context.pop("destination"),
+        # and a destination is routinely a list. A string-only test reads a list
+        # as "no source" and delivers. Each value is stripped before the test: a
+        # minted peer id carries no space, so a padded one can only widen what
+        # the guard refuses.
+        source = message.context.get("source") or []
+        if not isinstance(source, (list, tuple)):
+            source = [source]
+        sources = {s.strip() for s in source if isinstance(s, str)}
+        # a snapshot: connect and disconnect mutate clients from another thread
+        connected = list(self.clients.items())
+
+        if target_peers and sources & {peer for peer, _ in connected}:
+            LOG.debug(f"TestAgentProtocol: not delivering {message.msg_type} — "
+                      f"source {sorted(sources)} names a connected peer, so this "
+                      f"is a request and not a response")
+        elif target_peers:
+            for peer, client in connected:
                 if peer in target_peers:
                     LOG.debug(f"TestAgentProtocol: routing {message.msg_type} → {peer}")
                     message.context["source"] = "hive"
