@@ -50,8 +50,26 @@ plot = [
     "matplotlib",
     "networkx",
 ]
+# The `timeout` key below is a pytest-timeout key. Without this extra installed
+# pytest does NOT fail on it: it emits `PytestConfigWarning: Unknown config
+# option: timeout` and carries on, so the cap is absent while the run looks
+# normal. The warning is easy to miss in a long log, which is why `--strict-config`
+# is in addopts below — that turns the warning into an error and makes this
+# extra's absence impossible to overlook rather than merely reported.
+test = [
+    "pytest-timeout>=2.1",
+]
 
 [tool.pytest.ini_options]
+# `--strict-config` turns an unknown ini key from a warning into an error, so a
+# run without the `test` extra FAILS instead of quietly losing the cap below.
+# That is the point of this line: the defect this file was changed to fix was a
+# precondition that could be forgotten, and a cure that can itself be forgotten
+# keeps the mechanism. It guards every future config key here, not only `timeout`.
+addopts = "--strict-config"
+# Needs the `test` extra: see the note there. The cap catches a deadlock, so it
+# is close to the cost of the slowest cell. A cell that needs more says so with
+# its own `@pytest.mark.timeout`.
 timeout = 30
 markers = [
     "slow: slow tests that may take longer",
