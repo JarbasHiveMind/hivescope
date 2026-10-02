@@ -38,6 +38,9 @@ from hivescope.assertions import (
     assert_source_stamped,
     assert_destination_routed,
     assert_session_inbound_preserved,
+    assert_session_id_natted,
+    assert_sessions_isolated,
+    assert_session_contents_merged_over_baseline,
     assert_session_outbound_preserved,
     assert_fifo_order,
     assert_session_propagated_unchanged,
@@ -169,19 +172,11 @@ class TestSourceStamping:
         finally:
             b.stop_all()
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="relay bind_upstream not in released hivemind-core; "
-               "passes once core relay wiring lands",
-    )
     def test_source_stamped_through_relay(self):
         """Source stamping survives a relay hop (chain_topology: M0→R0→S0)."""
         b = TopologyBuilder()
         m = b.add_master("M0")
-        m.register_satellite("relay-key", password="relay-password")
         r = b.add_relay("R0", upstream=m)
-        r.register_satellite("sat-key", password="sat-password",
-                              allowed_types=["recognizer_loop:utterance"])
         b.add_satellite("S0", upstream=r,
                         allowed_types=["recognizer_loop:utterance"])
         b.start_all()
@@ -245,7 +240,8 @@ class TestSessionFidelity:
     """BRIDGE-1 §4.1: the bridge preserves context.session in both directions."""
 
     def test_session_inbound_preserved(self):
-        """Satellite's session_id and lang reach the bus context unchanged."""
+        """Satellite's lang reaches the bus context unchanged, and its
+        session_id is NATted to the connection's per-message Layer-1 id."""
         b = _single_sat_with_utterance_allowed()
         b.start_all()
         try:
@@ -264,8 +260,9 @@ class TestSessionFidelity:
 
             assert_session_inbound_preserved(
                 m, s,
-                expected_session={"session_id": custom_session_id, "lang": sess.serialize().get("lang")},
+                expected_session={"lang": sess.serialize().get("lang")},
             )
+            assert_session_id_natted(m, s, custom_session_id)
         finally:
             b.stop_all()
 
@@ -295,6 +292,106 @@ class TestSessionFidelity:
                 expected_session={"session_id": session_id},
                 timeout=2.0,
             )
+        finally:
+            b.stop_all()
+
+
+class TestSessionNAT:
+    """HIVEMIND-BRIDGE-1 §4: per-connection session NAT and multiplex isolation."""
+
+    def test_sessions_isolated_on_shared_connection(self):
+        """Two declared session ids sent over ONE connection land on two
+        distinct Layer-1 sessions sharing the connection's nonce prefix."""
+        b = _single_sat_with_utterance_allowed()
+        b.start_all()
+        try:
+            m = b.get_master("M0")
+            s = b.get_satellite("S0")
+
+            declared_a, declared_b = "call-a", "call-b"
+            for declared in (declared_a, declared_b):
+                sess = Session(session_id=declared)
+                msg = Message(
+                    "recognizer_loop:utterance",
+                    data={"utterances": ["hi"]},
+                    context={"session": sess.serialize()},
+                )
+                s.send(msg)
+            time.sleep(0.2)
+
+            assert_sessions_isolated(m, s, [declared_a, declared_b])
+
+            # Non-vacuity: an id that was never declared must not be found.
+            with pytest.raises(AssertionError):
+                assert_sessions_isolated(m, s, [declared_a, "never-sent"])
+        finally:
+            b.stop_all()
+
+    def test_session_contents_merged_over_thin_message(self):
+        """A thin follow-up message (no location) keeps the HELLO baseline's
+        location instead of it being clobbered by a fresh default."""
+        b = _single_sat_with_utterance_allowed()
+        b.start_all()
+        try:
+            m = b.get_master("M0")
+            s = b.get_satellite("S0")
+
+            # Simulate a satellite that HELLO'd with a real, non-default
+            # location — the connection's baseline used by every later
+            # per-message merge (HIVEMIND-BRIDGE-1 §4).
+            conn = m.hm_protocol.clients[s.peer]
+            baseline_location = {
+                "city": {"code": "Porto", "name": "Porto",
+                         "state": {"code": "13", "name": "Porto",
+                                   "country": {"code": "PT", "name": "Portugal"}}},
+                "coordinate": {"latitude": 41.1579, "longitude": -8.6291},
+                "timezone": {"code": "Europe/Lisbon", "name": "WET",
+                             "dstOffset": 3600000, "offset": 0},
+            }
+            conn.sess.location_preferences = baseline_location
+
+            # A thin message: only session_id, no location/lang at all.
+            thin = Message(
+                "recognizer_loop:utterance",
+                data={"utterances": ["oi"]},
+                context={"session": {"session_id": conn.sess.session_id}},
+            )
+            s.send(thin)
+            time.sleep(0.2)
+
+            assert_session_contents_merged_over_baseline(
+                m, s, expected_baseline={"location": baseline_location},
+            )
+
+            # Non-vacuity: a wrong expected location must fail.
+            with pytest.raises(AssertionError):
+                assert_session_contents_merged_over_baseline(
+                    m, s, expected_baseline={"location": {"city": {"code": "Wrong"}}},
+                )
+        finally:
+            b.stop_all()
+
+    def test_session_id_natted_rejects_wrong_declared_id(self):
+        """assert_session_id_natted is non-vacuous: a wrong declared id fails."""
+        b = _single_sat_with_utterance_allowed()
+        b.start_all()
+        try:
+            m = b.get_master("M0")
+            s = b.get_satellite("S0")
+
+            sid = s.shim.session_id
+            sess = Session(session_id=sid)
+            msg = Message(
+                "recognizer_loop:utterance",
+                data={"utterances": ["hello"]},
+                context={"session": sess.serialize()},
+            )
+            s.send(msg)
+            time.sleep(0.2)
+
+            assert_session_id_natted(m, s, sid)
+            with pytest.raises(AssertionError):
+                assert_session_id_natted(m, s, "not-the-declared-id")
         finally:
             b.stop_all()
 
@@ -376,19 +473,11 @@ class TestFifoOrdering:
         finally:
             b.stop_all()
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="relay bind_upstream not in released hivemind-core; "
-               "passes once core relay wiring lands",
-    )
     def test_fifo_through_relay(self):
         """Sequential utterances through a relay chain arrive in order at the root."""
         b = TopologyBuilder()
         m = b.add_master("M0")
-        m.register_satellite("relay-key", password="relay-password")
         r = b.add_relay("R0", upstream=m)
-        r.register_satellite("sat-key", password="sat-password",
-                              allowed_types=["recognizer_loop:utterance"])
         b.add_satellite("S0", upstream=r,
                         allowed_types=["recognizer_loop:utterance"])
         b.start_all()
@@ -438,8 +527,9 @@ class TestSessionPropagation:
         finally:
             b.stop_all()
 
-    def test_session_id_propagated_unchanged(self):
-        """session_id set by the satellite is unchanged at bus injection."""
+    def test_session_id_natted_per_connection(self):
+        """A non-admin satellite's declared session_id is NATted to
+        conn_nonce:declared_id at bus injection, not left unchanged."""
         b = _single_sat_with_utterance_allowed()
         b.start_all()
         try:
@@ -456,12 +546,7 @@ class TestSessionPropagation:
             s.send(msg)
             time.sleep(0.2)
 
-            assert_session_propagated_unchanged(
-                m,
-                field="session_id",
-                value=sid,
-                msg_type="recognizer_loop:utterance",
-            )
+            assert_session_id_natted(m, s, sid)
         finally:
             b.stop_all()
 
@@ -509,6 +594,9 @@ def test_bridge1_assertions_importable():
         "assert_source_stamped",
         "assert_destination_routed",
         "assert_session_inbound_preserved",
+        "assert_session_id_natted",
+        "assert_sessions_isolated",
+        "assert_session_contents_merged_over_baseline",
         "assert_session_outbound_preserved",
         "assert_fifo_order",
         "assert_session_propagated_unchanged",

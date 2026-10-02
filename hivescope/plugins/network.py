@@ -58,12 +58,15 @@ class TestNetworkProtocol(NetworkProtocol):
             sess=Session(session_id="default"),  # re-assigned after HELLO from satellite
             hm_protocol=hm_proto,
             # populate from DB entry (mirrors what HiveMindTornadoWebSocket.open() does)
-            crypto_key=db_client.crypto_key,
+            # crypto_key is no longer a HiveMindClientConnection field under
+            # v3-Noise-only — the Noise handshake is the sole transport-crypto
+            # layer, so a pre-shared crypto_key is never forwarded to core.
             pswd_handshake=(PasswordHandShake(db_client.password)
                             if db_client.password else None),
             is_admin=db_client.is_admin,
             can_escalate=db_client.can_escalate,
             can_propagate=db_client.can_propagate,
+            can_broadcast=db_client.can_broadcast,
             allowed_types=list(db_client.allowed_types or []),
             node_type=HiveMindNodeType.NODE,
         )

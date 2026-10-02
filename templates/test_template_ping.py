@@ -1,33 +1,36 @@
 """Copy this file into your repo's tests/e2e/ and rename.
 
-PENDING (partial): PING network-map routing is partially implemented in core.
-Track: https://github.com/JarbasHiveMind/HiveMind-core/pull/74
+PING maps the network. There is no PONG message type: a node answers a PING
+by sending its own PING, with the same ``flood_id``, wrapped in a PROPAGATE.
 
-PING is used to map the network topology; it cascades like CASCADE but is
-reserved for the mesh's own use. Basic ping handling exists; full round-trip
-responses are pending. When core#74 lands, remove the xfail marker.
+The wrapper matters. hivemind-core reaches ``handle_ping_message`` only from
+``handle_propagate_message``, so a bare PING is dropped. Send
+``PROPAGATE(PING)`` and the master answers with ``PROPAGATE(PING)``.
 """
 
-import pytest
+import uuid
+
 from hivemind_bus_client.message import HiveMessage, HiveMessageType
 
 from hivescope.scenarios import single_satellite
 from hivescope.assertions import assert_ping_responded
 
 
-@pytest.mark.xfail(
-    reason="PING full round-trip pending: hivemind-core#74",
-    strict=False,
-)
 def test_ping_round_trip():
-    """A PING from satellite should be received by master and a pong returned."""
+    """A PING flood from a satellite comes back as a responsive PING."""
     b = single_satellite()
     b.start_all()
     try:
         m = b.get_master("M0")
         s = b.get_satellite("S0")
 
-        s.send(HiveMessage(HiveMessageType.PING, payload={}))
+        inner = HiveMessage(HiveMessageType.PING, {
+            "flood_id": uuid.uuid4().hex,
+            "peer": s.peer,
+            "site_id": s.identity.site_id,
+            "timestamp": 0,
+        })
+        s.send(HiveMessage(HiveMessageType.PROPAGATE, payload=inner))
 
         assert_ping_responded(m, s)
     finally:

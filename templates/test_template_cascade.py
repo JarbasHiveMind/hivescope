@@ -1,14 +1,11 @@
 """Copy this file into your repo's tests/e2e/ and rename.
 
-PENDING: CASCADE routing is not yet implemented in hivemind-core.
-Track: https://github.com/JarbasHiveMind/HiveMind-core/pull/74
-       https://github.com/JarbasHiveMind/hivemind-websocket-client/pull/88
-
 CASCADE is like PROPAGATE but expects responses from all nodes (optional).
-When core#74 lands, remove the xfail markers and implement the response check.
+
+The inner payload must be a HiveMessage, not a bare OVOS Message. Core reads a
+CASCADE payload as a nested HiveMessage, so a bare Message raises a TypeError.
 """
 
-import pytest
 from hivemind_bus_client.message import HiveMessage, HiveMessageType
 from ovos_bus_client.message import Message
 
@@ -16,10 +13,6 @@ from hivescope.scenarios import three_satellites
 from hivescope.assertions import assert_cascade_routed
 
 
-@pytest.mark.xfail(
-    reason="CASCADE routing pending: hivemind-core#74 / hivemind-websocket-client#88",
-    strict=False,
-)
 def test_cascade_reaches_all_nodes():
     """A CASCADE sent from one satellite should reach master and all siblings."""
     b = three_satellites()
@@ -32,7 +25,7 @@ def test_cascade_reaches_all_nodes():
 
         s0.send(HiveMessage(
             HiveMessageType.CASCADE,
-            payload=Message("network:ping", {}),
+            payload=HiveMessage(HiveMessageType.BUS, Message("network:ping", {})),
         ))
 
         assert_cascade_routed(m, s1, s2, count=1)
