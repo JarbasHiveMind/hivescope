@@ -2,6 +2,7 @@
 Helpers for creating test node identities and other small utilities.
 """
 import os
+import shutil
 import tempfile
 import threading
 from typing import Optional
@@ -40,8 +41,10 @@ def make_identity(name: str,
     Generates a fresh RSA key pair and saves the PEM to a temp file so
     HandShake / poorman_handshake can load it by path.
     """
+    owned_tmpdir = None
     if tmpdir is None:
         tmpdir = tempfile.mkdtemp(prefix=f"hivemind_test_{name}_")
+        owned_tmpdir = tmpdir
 
     pem_path = os.path.join(tmpdir, f"{name}.pem")
 
@@ -57,7 +60,19 @@ def make_identity(name: str,
     identity.private_key = pem_path
     identity.public_key = hs.pubkey
 
+    # Nodes remove this directory when they stop. Only directories this call
+    # created are tracked; a caller-supplied tmpdir stays the caller's to clean.
+    identity._hivescope_tmpdir = owned_tmpdir
+
     return identity
+
+
+def remove_identity_tmpdir(identity) -> None:
+    """Remove the temp directory ``make_identity`` created for *identity*."""
+    tmpdir = getattr(identity, "_hivescope_tmpdir", None)
+    if tmpdir:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        identity._hivescope_tmpdir = None
 
 
 def wait_event(event: threading.Event, timeout: float = 5.0) -> bool:

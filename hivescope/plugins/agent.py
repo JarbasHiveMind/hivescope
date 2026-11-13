@@ -5,15 +5,17 @@ Records every Message injected into the 'OVOS bus' so tests can assert on it.
 
 Reverse routing
 ---------------
-In a live deployment the agent protocol (OVOSProtocol in ovos-bus-client/hpm.py)
-subscribes to the OVOS bus and routes outgoing messages back to the originating
-satellite by inspecting ``message.context["destination"]``.
+In a live deployment the agent protocol subscribes to the OVOS bus and routes a
+backend response back to the peer its ``message.context["destination"]`` names,
+subject to the response isolation of **HIVEMIND-AGENT-1 §3.2**.
 
-TestAgentProtocol replicates this behaviour verbatim so that test assertions
-against ``SatelliteNode.internal_bus`` match what a real satellite would receive.
+TestAgentProtocol routes on the same rules, so an assertion against
+``SatelliteNode.internal_bus`` reads what a satellite would receive from a
+conformant server. A harness that relayed a message §3.2 forbids would hand an
+isolation cell a pass the deployment does not earn.
 
-Reference: ovos-bus-client/ovos_bus_client/hpm.py — OVOSProtocol.register_bus_handlers(),
-           OVOSProtocol.handle_send(), OVOSProtocol.handle_internal_mycroft()
+Reference: hivemind-ovos-agent-plugin — OVOSAgentProtocol.register_bus_handlers(),
+           OVOSAgentProtocol.handle_send(), OVOSAgentProtocol.handle_internal_mycroft()
 """
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -35,19 +37,29 @@ class TestAgentProtocol(AgentProtocol):
     injected: List[Message] = field(default_factory=list)
 
     def __post_init__(self):
+        # shutdown() must be able to put the bus back exactly as it was, so
+        # keep both the original emit and our own wrapper. Two protocols can
+        # share one bus (e.g. a shared MiniCroft): each unwraps only its own
+        # layer, and only while its wrapper is still the installed one.
         _orig_emit = self.bus.emit
+        self._orig_emit = _orig_emit
 
         def _recording_emit(msg):
             if isinstance(msg, str):
                 try:
                     msg = Message.deserialize(msg)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Not a Message — it is still forwarded untouched, but a
+                    # silent pass hid malformed emissions from the test author.
+                    LOG.warning(
+                        "TestAgentProtocol: could not deserialize a bus "
+                        "emission, recording skipped: %s", exc)
             if isinstance(msg, Message):
                 self.injected.append(msg)
             _orig_emit(msg)
 
         self.bus.emit = _recording_emit
+        self._recording_emit = _recording_emit
 
         # Mirror OVOSProtocol.register_bus_handlers() — enables reverse routing
         # (OVOS bus messages → satellite) matching live deployment behaviour.
@@ -76,9 +88,34 @@ class TestAgentProtocol(AgentProtocol):
     # Streams speak replies correlated by a fresh query_id (query-scoped
     # session keeps them from being reverse-routed to the satellite).
     # -----------------------------------------------------------------------
-    def natural_language_query(self, utterance: str, lang: str):
+    def natural_language_query(self, utterance: str, lang: str,
+                               timeout: float = 10.0,
+                               raise_on_timeout: bool = False):
         """Stream speak replies from the test bus, correlated by a fresh
-        query-scoped session (short timeout for tests)."""
+        query-scoped session.
+
+        Yields each answer chunk, then a final ``None`` end-of-query sentinel
+        once ``ovos.utterance.handled`` arrives.
+
+        The default behaviour matches production
+        (``OVOSAgentProtocol.natural_language_query``): a timeout yields
+        ``None`` — the same sentinel as a clean empty answer — because the
+        ``AgentProtocol`` contract uses it to trigger escalation. Keeping that
+        shape is what makes escalation testable through this harness.
+
+        Args:
+            utterance:        The query text.
+            lang:             BCP-47 language tag.
+            timeout:          Seconds to wait for the next chunk (production
+                              uses 10.0).
+            raise_on_timeout: Test-ergonomics opt-in. When ``True``, a timeout
+                              raises ``TimeoutError`` instead of yielding
+                              ``None``, so a stalled agent is distinguishable
+                              from an empty answer.
+
+        Raises:
+            TimeoutError: Only when *raise_on_timeout* is ``True``.
+        """
         import queue
         import uuid
         qid = uuid.uuid4().hex
@@ -112,8 +149,16 @@ class TestAgentProtocol(AgentProtocol):
             ))
             while True:
                 try:
-                    chunk = q.get(timeout=2.0)
+                    chunk = q.get(timeout=timeout)
                 except queue.Empty:
+                    if raise_on_timeout:
+                        raise TimeoutError(
+                            f"TestAgentProtocol.natural_language_query: no reply "
+                            f"chunk and no 'ovos.utterance.handled' within "
+                            f"{timeout}s for utterance {utterance!r}"
+                        )
+                    # Production contract: a stalled agent looks like an empty
+                    # answer so the caller can escalate.
                     yield None
                     return
                 if chunk is None:
@@ -127,7 +172,15 @@ class TestAgentProtocol(AgentProtocol):
     def handle_send(self, message: Message) -> None:
         """Route an explicit ``hive.send.downstream`` request.
 
-        Exact port of OVOSProtocol.handle_send() from ovos-bus-client/hpm.py.
+        Exact port of ``OVOSAgentProtocol.handle_send()`` from
+        hivemind-ovos-agent-plugin. The dispatch rules are, in order:
+
+        1. ``PROPAGATE`` / ``BROADCAST`` — fan out to every connected peer.
+        2. ``ESCALATE`` — ignored; only a slave may escalate.
+        3. anything else with a ``peer`` — sent to that peer alone. This
+           includes ``QUERY`` and ``CASCADE``: they are targeted here, not
+           dropped and not fanned out.
+        4. anything else without a ``peer`` — nothing to do.
         """
         payload = message.data.get("payload")
         peer = message.data.get("peer")
@@ -135,12 +188,12 @@ class TestAgentProtocol(AgentProtocol):
 
         hmessage = HiveMessage(msg_type, payload=payload, target_peers=[peer])
 
-        if msg_type in [HiveMessageType.PROPAGATE, HiveMessageType.BROADCAST,
-                        HiveMessageType.CASCADE]:
-            # Broadcast to all connected satellites
+        if msg_type in [HiveMessageType.PROPAGATE, HiveMessageType.BROADCAST]:
+            # Fan out to every connected satellite. CASCADE is deliberately
+            # NOT in this list: upstream fans out PROPAGATE/BROADCAST only.
             for p, client in self.clients.items():
                 client.send(hmessage)
-        elif msg_type in [HiveMessageType.ESCALATE, HiveMessageType.QUERY]:
+        elif msg_type == HiveMessageType.ESCALATE:
             # Only slaves can escalate; ignore silently when we are the master
             pass
         elif peer:
@@ -156,22 +209,53 @@ class TestAgentProtocol(AgentProtocol):
                 )
 
     def handle_internal_mycroft(self, message: str) -> None:
-        """Forward OVOS bus messages to satellite clients when they are the destination.
+        """Deliver a backend response to the peers its ``destination`` names.
 
-        Exact port of OVOSProtocol.handle_internal_mycroft() from ovos-bus-client/hpm.py.
+        Port of ``OVOSAgentProtocol.handle_internal_mycroft()`` from
+        hivemind-ovos-agent-plugin, carrying its request guard.
 
         The ``message`` bus event carries the raw serialised JSON string (FakeBus
         emits ``ee.emit("message", message.serialize())``).  Client isolation is
-        enforced here: each satellite only receives messages whose ``destination``
-        context matches its peer ID.
+        enforced here: each satellite only receives responses whose
+        ``destination`` context matches its peer ID.
         """
         message = Message.deserialize(message)
         target_peers = message.context.get("destination") or []
         if not isinstance(target_peers, list):
             target_peers = [target_peers]
 
-        if target_peers:
-            for peer, client in self.clients.items():
+        # A REQUEST IS NEVER DELIVERED TO A PEER, whatever its destination says.
+        # HIVEMIND-BRIDGE-1 §3.1 makes the node stamp context["source"] with the
+        # peer id it minted for the connection a message arrived on, and those
+        # values MUST be distinct per peer. So a message whose source names a
+        # CONNECTED peer is that peer's own request travelling to the agent --
+        # never an answer to send to somebody. HIVEMIND-AGENT-1 §3.2 permits
+        # delivery of a RESPONSE to the peers its destination names, and a
+        # request is not a response.
+        #
+        # Without this test, anything that writes a peer id into destination
+        # after injection -- a transformer, a skill, any other bus writer -- has
+        # this relay deliver one peer's traffic to another peer's socket with
+        # source rewritten to "hive", which §3.2 forbids outright.
+        #
+        # source is normalised the same way as destination above, because a
+        # satellite's own slave protocol produces the list form: on an inbound
+        # BUS message it does context["source"] = context.pop("destination"),
+        # and a destination is routinely a list. A string-only test reads a list
+        # as "no source" and delivers.
+        source = message.context.get("source") or []
+        if not isinstance(source, (list, tuple)):
+            source = [source]
+        sources = {s for s in source if isinstance(s, str)}
+        # a snapshot: connect and disconnect mutate clients from another thread
+        connected = list(self.clients.items())
+
+        if target_peers and sources & {peer for peer, _ in connected}:
+            LOG.debug(f"TestAgentProtocol: not delivering {message.msg_type} — "
+                      f"source {sorted(sources)} names a connected peer, so this "
+                      f"is a request and not a response")
+        elif target_peers:
+            for peer, client in connected:
                 if peer in target_peers:
                     LOG.debug(f"TestAgentProtocol: routing {message.msg_type} → {peer}")
                     message.context["source"] = "hive"
@@ -210,3 +294,34 @@ class TestAgentProtocol(AgentProtocol):
     def clear(self):
         """Reset all recorded messages."""
         self.injected.clear()
+
+    # -----------------------------------------------------------------------
+    # Lifecycle
+    # -----------------------------------------------------------------------
+
+    def shutdown(self) -> None:
+        """Undo everything :meth:`__post_init__` installed on the bus.
+
+        Removes the ``hive.send.downstream`` and ``message`` handlers and
+        restores the original ``bus.emit``. Without this, a bus that outlives
+        the protocol (a shared ``FakeBus`` or a MiniCroft) keeps routing
+        through a dead protocol and keeps growing ``injected``.
+
+        Safe to call twice, and safe when another protocol wrapped the same
+        bus afterwards — in that case the emit wrapper is left alone, because
+        removing a middle layer would break the outer one.
+        """
+        for event, handler in (("hive.send.downstream", self.handle_send),
+                               ("message", self.handle_internal_mycroft)):
+            try:
+                self.bus.remove(event, handler)
+            except Exception as exc:
+                LOG.warning("TestAgentProtocol.shutdown: removing %r handler "
+                            "failed: %s", event, exc)
+
+        wrapper = getattr(self, "_recording_emit", None)
+        orig = getattr(self, "_orig_emit", None)
+        if wrapper is not None and orig is not None and self.bus.emit is wrapper:
+            self.bus.emit = orig
+        self._recording_emit = None
+        self._orig_emit = None

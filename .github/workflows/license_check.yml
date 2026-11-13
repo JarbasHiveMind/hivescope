@@ -9,6 +9,7 @@ jobs:
   license_check:
     uses: OpenVoiceOS/gh-automations/.github/workflows/license-check.yml@dev
     with:
-      # HiveMind packages are AGPL-3.0 by design; the gate is for catching
-      # unexpected third-party copyleft, not the project's own license family.
+      # The gate catches unexpected third-party copyleft (GPL/AGPL/LGPL) so
+      # this Apache-2.0 "universal donor" package stays permissively licensed;
+      # exclude the project's own first-party packages from that scan.
       exclude_packages: '^(hivemind|hivescope|z85base91|poorman).*'

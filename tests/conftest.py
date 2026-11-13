@@ -1,5 +1,8 @@
 """Shared pytest hooks for the hivescope test suite."""
 
+# Exercise the shipped fixtures in our own suite, so a broken fixture fails CI.
+pytest_plugins = ["hivescope.pytest_fixtures"]
+
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     """Warn loudly when an xfail-marked test starts passing.
