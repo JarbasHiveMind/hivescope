@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.11a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.11a1) (2026-11-13)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.10a1...0.8.11a1)
+
+**Merged pull requests:**
+
+- fix: decode a connection's frames in the order they were sent [\#92](https://github.com/JarbasHiveMind/hivescope/pull/92) ([JarbasAl](https://github.com/JarbasAl))
+
 ## [0.8.10a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.10a1) (2026-11-13)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.9a1...0.8.10a1)
