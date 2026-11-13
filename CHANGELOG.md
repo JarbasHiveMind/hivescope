@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.9a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.9a1) (2026-11-13)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.8a1...0.8.9a1)
+
+**Merged pull requests:**
+
+- fix: a request is never relayed to a peer, whatever its destination says [\#88](https://github.com/JarbasHiveMind/hivescope/pull/88) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.8.8a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.8a1) (2026-10-02)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.7a2...0.8.8a1)
