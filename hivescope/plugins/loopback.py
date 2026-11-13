@@ -323,7 +323,25 @@ class LoopbackNetworkProtocol(NetworkProtocol):
         db_client = self.hm_protocol.db.get_client_by_api_key(key)
         if db_client is None:
             _LOG.warning(f"Client key '{key}' not found in database")
-            await websocket.close(code=4001, reason="Invalid API key")
+            # 1008 with the binding's own words for THIS refusal. The
+            # reference WebSocket binding refuses twice and words the two
+            # apart on purpose: `close(code=1008, reason="invalid
+            # authorization")` for a malformed authorization header, and
+            # `close(code=1008, reason="invalid api key")` for a key the
+            # database does not hold, with a comment there saying the code is
+            # the same on purpose. This is the second case, so it carries the
+            # second reason.
+            #
+            # The code is what the fleet's client latches on:
+            # hivemind_bus_client.client.AUTH_REJECTED_CLOSE_CODE is 1008, and
+            # on it the client stops reconnecting and tells the operator the
+            # identity was refused. Closing this test hub with anything else
+            # made a satellite refused HERE behave unlike one refused in
+            # production, which is the one thing a test double must not do.
+            # The reason is not decoration either: the client copies it
+            # straight into `_auth_rejected`, and it is the text an operator
+            # reads, so the wrong one names the wrong fault.
+            await websocket.close(code=1008, reason="invalid api key")
             return
 
         # Async queue for crossing the sync/async boundary.
