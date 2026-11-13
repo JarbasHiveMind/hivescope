@@ -242,13 +242,11 @@ class TestAgentProtocol(AgentProtocol):
         # satellite's own slave protocol produces the list form: on an inbound
         # BUS message it does context["source"] = context.pop("destination"),
         # and a destination is routinely a list. A string-only test reads a list
-        # as "no source" and delivers. Each value is stripped before the test: a
-        # minted peer id carries no space, so a padded one can only widen what
-        # the guard refuses.
+        # as "no source" and delivers.
         source = message.context.get("source") or []
         if not isinstance(source, (list, tuple)):
             source = [source]
-        sources = {s.strip() for s in source if isinstance(s, str)}
+        sources = {s for s in source if isinstance(s, str)}
         # a snapshot: connect and disconnect mutate clients from another thread
         connected = list(self.clients.items())
 

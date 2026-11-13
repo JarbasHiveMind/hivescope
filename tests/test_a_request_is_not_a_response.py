@@ -134,15 +134,6 @@ class TestARequestIsNotRelayed:
 
         assert victim_box.utterances() == []
 
-    def test_a_padded_peer_id_is_refused(self, two_peers):
-        # A minted peer id carries no space, so stripping before the test can
-        # only widen what the guard refuses. It fails closed.
-        master, origin, victim, _origin_box, victim_box = two_peers
-
-        _emit(master, [victim.peer], source=origin.peer + " ")
-
-        assert victim_box.utterances() == []
-
     def test_a_peer_cannot_address_itself_either(self, two_peers):
         # A design case rather than a security one: a peer's own request must
         # not come back to it as though the backend had answered.
