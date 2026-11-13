@@ -364,6 +364,12 @@ class SatelliteNode:
         self._connection: Optional[HiveMindClientConnection] = None
         self._master: Optional[MasterNode] = None
 
+        # Frames in the order the master's send lock released them, which is
+        # the order their Noise nonces were issued. Pump queues are per thread,
+        # so decoding must pop from here under a lock, not follow pump order.
+        self._inbox: deque = deque()
+        self._decode_lock = threading.Lock()
+
     @classmethod
     def create(cls, name: str, site_id: Optional[str] = None,
                shared_bus: bool = False,
@@ -581,15 +587,34 @@ class SatelliteNode:
         #
         # Deferring the decode keeps FIFO order and makes each frame see the
         # state the frames before it left behind.
-        _deliver(lambda: self._decode_and_dispatch(connection, peer, payload))
+        #
+        # The frame is queued here, under the sender's send lock, and each pump
+        # action decodes the oldest queued frame. Two threads sending on one
+        # session therefore cannot decode out of nonce order.
+        self._inbox.append((connection, peer, payload))
+        _deliver(self._decode_and_dispatch)
 
-    def _decode_and_dispatch(self, connection, peer, payload) -> None:
-        """Decode one frame and dispatch it, both inside the pump.
+    def _decode_and_dispatch(self) -> None:
+        """Decode the oldest queued frame and dispatch it, inside the pump.
 
-        ``connection`` is passed in rather than re-read: by the time the pump
-        reaches this frame the satellite may have reconnected or disconnected,
-        and this frame belongs to the connection that delivered it.
+        The connection travels with the frame: by the time the pump reaches
+        it the satellite may have reconnected or disconnected, and the frame
+        belongs to the connection that delivered it.
         """
+        with self._decode_lock:
+            connection, peer, payload = self._inbox.popleft()
+            message = self._decode(connection, peer, payload)
+        if message is None:
+            return
+        self.recorder.record("in", message.msg_type, message._payload, peer)
+
+        # Already inside the pump (see _receive_raw), so the handler runs here
+        # directly: the wire-send that delivered this frame has returned and
+        # released NoiseTransport's _send_lock, which is what the pump
+        # guarantees.
+        self.shim.emitter.emit(message.msg_type, message)
+
+    def _decode(self, connection, peer, payload):
         # The connection is the master's HiveMindClientConnection, shared
         # in-process for framing/session bookkeeping; it carries the master's
         # own Noise transport (the responder's cipher states), not the
@@ -609,26 +634,22 @@ class SatelliteNode:
         # message received on a protocol v3 session". Assigning None mirrors
         # "not established yet", which is what the satellite actually is.
         client_transport = getattr(self.shim, "noise_transport", None)
-        saved_transport = connection.noise_transport
-        connection.noise_transport = client_transport
-        try:
-            message = connection.decode(payload)
-        except Exception as exc:
-            log.exception("[%s] _receive_raw decode error: %s", self.name, exc)
-            # Record the failure so a test waiting on a message fails fast with
-            # the decode error in the record list instead of on timeout.
-            self.recorder.record("in", "_decode_error", {"error": str(exc)}, peer)
-            return
-        finally:
-            connection.noise_transport = saved_transport
-
-        self.recorder.record("in", message.msg_type, message._payload, peer)
-
-        # Already inside the pump (see _receive_raw), so the handler runs here
-        # directly: the wire-send that delivered this frame has returned and
-        # released NoiseTransport's _send_lock, which is what the pump
-        # guarantees.
-        self.shim.emitter.emit(message.msg_type, message)
+        # The connection is shared with the master, whose sends read
+        # ``noise_transport`` under ``_send_lock``; holding it keeps a
+        # concurrent send from encrypting with the satellite's cipher.
+        with connection._send_lock:
+            saved_transport = connection.noise_transport
+            connection.noise_transport = client_transport
+            try:
+                return connection.decode(payload)
+            except Exception as exc:
+                log.exception("[%s] _receive_raw decode error: %s", self.name, exc)
+                # Record the failure so a test waiting on a message fails fast
+                # with the decode error in the record list instead of on timeout.
+                self.recorder.record("in", "_decode_error", {"error": str(exc)}, peer)
+                return None
+            finally:
+                connection.noise_transport = saved_transport
 
     def _on_disconnect(self, code: int = 1000, reason: str = ""):
         conn = self._connection
