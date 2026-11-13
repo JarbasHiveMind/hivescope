@@ -12,14 +12,11 @@ for closes with 1008. So a client refused by this hub kept reconnecting where
 the real one would have stopped, and every test written against this hub read
 a close code production never sends.
 
-THE CLOSE FRAME IS READ OFF THE WIRE, not out of the module source. An
-earlier version of this file matched the ``close(...)`` call with a regular
-expression, and reviewer-b measured what that cannot see: with the 1008 call
-disabled and a live ``close(4001)`` after it -- the exact defect this change
-fixes, put back -- all three tests still PASSED while the wire gave 4001, and
-rewording the log line failed two of them without changing any behaviour. A
-source match tests the text of the file. This connects, is refused, and reads
-the frame the client would read.
+THE CLOSE FRAME IS READ OFF THE WIRE, not out of the module source. A regular
+expression over the ``close(...)`` call cannot see a live ``close(4001)``
+placed after a disabled 1008 call, and it fails on a reworded log line without
+any change in behaviour. A source match tests the text of the file. This
+connects, is refused, and reads the frame the client would read.
 """
 import asyncio
 import base64
