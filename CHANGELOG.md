@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.10a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.10a1) (2026-11-13)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.9a1...0.8.10a1)
+
+**Merged pull requests:**
+
+- fix: the loopback hub refuses a key with 1008, as the binding does [\#83](https://github.com/JarbasHiveMind/hivescope/pull/83) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.8.9a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.9a1) (2026-11-13)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.8a1...0.8.9a1)
