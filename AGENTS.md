@@ -28,7 +28,7 @@ multi-repo topology and stress scenarios.
   `templates/`, one per `HiveMessageType`, tracked against the coverage table in
   `LIBRARY.md`.
 - Set up a throwaway environment inside your clone; never touch a shared venv:
-  `python3 -m venv .venv && VIRTUAL_ENV=$PWD/.venv uv pip install -e ".[plot]" --prerelease=allow`
+  `python3 -m venv .venv && VIRTUAL_ENV=$PWD/.venv uv pip install -e ".[plot,test]" --prerelease=allow`
 - Run the suite in the foreground: `python3 -m pytest tests -q`. Tests marked
   `slow` may take longer; tests decorated `xfail(strict=False)` are pending
   protocol coverage (currently RENDEZVOUS, blocked on
