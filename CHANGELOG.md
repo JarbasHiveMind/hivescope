@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.13a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.13a1) (2026-11-27)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.12a1...0.8.13a1)
+
+**Merged pull requests:**
+
+- fix\(tests\): give test client identities an app\_name [\#97](https://github.com/JarbasHiveMind/hivescope/pull/97) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.8.12a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.12a1) (2026-11-27)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.11a1...0.8.12a1)
