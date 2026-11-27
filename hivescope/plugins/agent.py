@@ -18,7 +18,7 @@ Reference: hivemind-ovos-agent-plugin — OVOSAgentProtocol.register_bus_handler
            OVOSAgentProtocol.handle_send(), OVOSAgentProtocol.handle_internal_mycroft()
 """
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ovos_bus_client.message import Message
 from ovos_utils.fakebus import FakeBus
@@ -325,3 +325,44 @@ class TestAgentProtocol(AgentProtocol):
             self.bus.emit = orig
         self._recording_emit = None
         self._orig_emit = None
+
+
+@dataclass
+class RelayAgentProtocol(TestAgentProtocol):
+    """Agent of a relay node: forwards each downstream peer's BUS message to
+    the relay's own master and routes the answer back down to that peer.
+
+    ``upstream`` is the relay's :class:`~hivescope.node.SatelliteNode`.
+    Answers are matched to the asking peer by session id. ``hive.*`` events
+    (client lifecycle, policy) are local to the relay and stay there.
+    """
+
+    upstream: Any = None
+    routes: Dict[str, str] = field(default_factory=dict)
+
+    def register_bus_handlers(self) -> None:
+        super().register_bus_handlers()
+        self.bus.on("message", self.handle_relay)
+
+    def handle_relay(self, message: str) -> None:
+        message = Message.deserialize(message)
+        source = message.context.get("source") or []
+        if not isinstance(source, list):
+            source = [source]
+        session_id = (message.context.get("session") or {}).get("session_id")
+        downstream = [p for p in source if p in self.clients]
+        if downstream and not message.msg_type.startswith("hive."):
+            # a downstream request: send it up through the relay's satellite side
+            self.routes[session_id] = downstream[0]
+            context = {k: v for k, v in message.context.items()
+                       if k not in ("source", "destination")}
+            self.upstream.send(Message(message.msg_type, message.data, context))
+        elif session_id in self.routes and not message.context.get("destination"):
+            # an answer from upstream: address it to the peer that asked
+            message.context["destination"] = [self.routes[session_id]]
+            message.context["source"] = "hive"
+            self.handle_internal_mycroft(message.serialize())
+
+    def shutdown(self) -> None:
+        self.bus.remove("message", self.handle_relay)
+        super().shutdown()

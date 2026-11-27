@@ -23,7 +23,7 @@ The test harness calls such a dual-role node a **relay** (because it relays
 messages between layers of the hive).  Internally it is modelled as a
 :class:`RelayNode` — a single object that owns one :class:`SatelliteNode`
 (the upstream connection) and one :class:`MasterNode` (the downstream
-listener), both sharing the same :class:`~hivescope.plugins.agent.TestAgentProtocol`
+listener), both sharing the same :class:`~hivescope.plugins.agent.RelayAgentProtocol`
 and ``FakeBus``.
 """
 from dataclasses import dataclass
@@ -33,7 +33,7 @@ from typing import Dict, List, Optional, Tuple, Union
 from ovos_utils.fakebus import FakeBus
 
 from hivescope.node import MasterNode, SatelliteNode
-from hivescope.plugins.agent import TestAgentProtocol
+from hivescope.plugins.agent import RelayAgentProtocol
 from hivescope.plugins.loopback import LoopbackNetworkProtocol
 from hivescope.plugins.network import TestNetworkProtocol
 
@@ -167,9 +167,10 @@ class TopologyBuilder:
         """Add a dual-role node: a satellite connected to *upstream* that also
         acts as a master for its own downstream satellites.
 
-        Both sides share a single :class:`~hivescope.plugins.agent.TestAgentProtocol`
-        and ``FakeBus``, matching real HiveMind deployments where one AI brain
-        handles both the upstream satellite connection and downstream listener.
+        Both sides share a single :class:`~hivescope.plugins.agent.RelayAgentProtocol`
+        and ``FakeBus``. As in a real relay, a BUS message from a downstream
+        satellite goes up to *upstream*, and the answer comes back down to the
+        satellite that sent it, matched by session id.
 
         Args:
             name:         Logical name for this relay (e.g. ``"R1"``).
@@ -189,8 +190,7 @@ class TopologyBuilder:
             :meth:`get_relay`.
         """
         parent = self._resolve_listener(upstream)
-        # Shared agent protocol — one brain, two protocol connections.
-        shared_agent = TestAgentProtocol()
+        shared_agent = RelayAgentProtocol()
         shared_bus = shared_agent.bus
 
         sat = SatelliteNode.create(f"{name}_sat", bus=shared_bus)
@@ -204,6 +204,7 @@ class TopologyBuilder:
         # This registers propagate_from_master / broadcast_from_master handlers
         # and enables escalate_to_master / propagate_to_master forwarding.
         master.hm_protocol.bind_upstream(sat.slave_protocol)
+        shared_agent.upstream = sat
 
         relay = RelayNode(name=name, upstream=sat, listener=master, bus=shared_bus)
         self._relays[name] = relay
