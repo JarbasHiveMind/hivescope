@@ -30,12 +30,16 @@ Or import directly in conftest.py:
   pytest_plugins = ['hivescope.pytest_fixtures']
 """
 
+import logging
+
 import pytest
 from typing import Optional
 
 from hivescope.topology import TopologyBuilder
 from hivescope.node import MasterNode, SatelliteNode
 from hivemind_bus_client.identity import NodeIdentity
+
+log = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="function")
@@ -56,11 +60,13 @@ def topology() -> TopologyBuilder:
     """
     builder = TopologyBuilder()
     yield builder
-    # Auto-stop on teardown
+    # The topology fixture is the single owner of teardown: every other
+    # fixture here builds on it, so a stop_all() in each of them ran the
+    # teardown two or three times per test.
     try:
         builder.stop_all()
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("topology fixture teardown failed: %s", exc)
 
 
 @pytest.fixture(scope="function")
@@ -68,24 +74,19 @@ def master_node(topology: TopologyBuilder) -> MasterNode:
     """
     A pre-configured master node in a simple single-master topology.
 
-    Automatically started and stopped.
+    Started automatically. Teardown belongs to the ``topology`` fixture this
+    one depends on, so it is not repeated here.
 
     Use to test satellite interactions:
 
-      def test_master_receives_message(master_node, satellite_node):
-          master_node.register_satellite("key1", password="pwd1")
-          satellite = topology.add_satellite("S0", upstream=master_node)
-          satellite.connect(master_node)
-          satellite.wait_for_handshake(timeout=5)
+      def test_master_receives_message(master_node, topology):
+          satellite = topology.add_satellite("S1", upstream=master_node)
+          topology.start_all()
+          assert satellite.wait_for_handshake(timeout=5)
     """
     m = topology.add_master("M0")
     topology.start_all()
     yield m
-    # Auto-stop on teardown
-    try:
-        topology.stop_all()
-    except Exception:
-        pass
 
 
 @pytest.fixture(scope="function")
@@ -104,21 +105,13 @@ def satellite_node(
           from ovos_bus_client.message import Message
           satellite_node.send(Message("test:message", {"data": "value"}))
     """
-    # Register the satellite in the master's DB
-    master_node.register_satellite("test-key", password="test-password")
-
-    # Create and connect the satellite
+    # Credentials come from the satellite's own generated identity; connect()
+    # registers them in the master DB together with the permissions below.
     s = topology.add_satellite("S0", upstream=master_node)
-    s.connect(master_node)
-    s.wait_for_handshake(timeout=10)
+    topology.start_all()
+    assert s.wait_for_handshake(timeout=10), "satellite_node handshake timed out"
 
     yield s
-
-    # Auto-stop on teardown
-    try:
-        topology.stop_all()
-    except Exception:
-        pass
 
 
 @pytest.fixture(scope="function")
@@ -131,23 +124,17 @@ def admin_satellite(
 
     Useful for testing admin-level operations (broadcast, propagate, etc).
     """
-    master_node.register_satellite(
-        "admin-key",
-        password="admin-password",
+    s = topology.add_satellite(
+        "S_ADMIN",
+        upstream=master_node,
         is_admin=True,
-        can_propagate=True
+        can_propagate=True,
+        can_broadcast=True,
     )
-
-    s = topology.add_satellite("S_ADMIN", upstream=master_node)
-    s.connect(master_node)
-    s.wait_for_handshake(timeout=10)
+    topology.start_all()
+    assert s.wait_for_handshake(timeout=10), "admin_satellite handshake timed out"
 
     yield s
-
-    try:
-        topology.stop_all()
-    except Exception:
-        pass
 
 
 @pytest.fixture(scope="function")
@@ -160,22 +147,16 @@ def restricted_satellite(
 
     Useful for testing ACL enforcement.
     """
-    master_node.register_satellite(
-        "restricted-key",
-        password="restricted-password",
+    s = topology.add_satellite(
+        "S_RESTRICTED",
+        upstream=master_node,
         is_admin=False,
         can_propagate=False,
         can_escalate=False,
-        allowed_types=["recognizer_loop:utterance"]
+        allowed_types=["recognizer_loop:utterance"],
     )
-
-    s = topology.add_satellite("S_RESTRICTED", upstream=master_node)
-    s.connect(master_node)
-    s.wait_for_handshake(timeout=10)
+    topology.start_all()
+    assert s.wait_for_handshake(timeout=10), "restricted_satellite handshake timed out"
 
     yield s
 
-    try:
-        topology.stop_all()
-    except Exception:
-        pass
