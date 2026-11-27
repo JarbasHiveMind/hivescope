@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.12a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.12a1) (2026-11-27)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.11a1...0.8.12a1)
+
+**Merged pull requests:**
+
+- fix\(tests\): the flood cell gets its own cap, and the cap gets its plugin [\#85](https://github.com/JarbasHiveMind/hivescope/pull/85) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.8.11a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.11a1) (2026-11-13)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.10a1...0.8.11a1)
