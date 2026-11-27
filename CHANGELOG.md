@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.14a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.14a1) (2026-11-27)
+
+[Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.13a1...0.8.14a1)
+
+**Merged pull requests:**
+
+- fix: relay forwards downstream BUS messages to its master [\#96](https://github.com/JarbasHiveMind/hivescope/pull/96) ([openvoiceos-bot](https://github.com/openvoiceos-bot))
+
 ## [0.8.13a1](https://github.com/JarbasHiveMind/hivescope/tree/0.8.13a1) (2026-11-27)
 
 [Full Changelog](https://github.com/JarbasHiveMind/hivescope/compare/0.8.12a1...0.8.13a1)
