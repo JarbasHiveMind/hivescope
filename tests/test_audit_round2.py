@@ -473,7 +473,7 @@ def _ws_client(url: str, name: str, key: str, password: str,
     host, port = host_port.split(":")
     port = int(port.split("/")[0])
 
-    identity = NodeIdentity()
+    identity = NodeIdentity(app_name="hivescope-tests")
     identity.access_key = key
     identity.password = password
     identity.default_master = f"ws://{host}"
@@ -516,15 +516,16 @@ def test_loopback_stop_runs_client_cleanup_and_leaves_no_ghost_peers():
         args=(url, "ghost", "ghost-key", "x9K#mQ7z!vL2pR8w$nT4jY6c-ghost", connected, close),
         daemon=True)
     t.start()
-    assert connected.wait(timeout=20), "websocket client never connected"
-    # admission runs on the server thread; loaded CI runners need a wide window
-    deadline = time.monotonic() + 20
-    while not m.hm_protocol.clients and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert m.hm_protocol.clients, "master never registered the client"
-
-    b.stop_all()
-    close.set()
+    try:
+        assert connected.wait(timeout=20), "websocket client never connected"
+        # admission runs on the server thread; loaded CI runners need a wide window
+        deadline = time.monotonic() + 20
+        while not m.hm_protocol.clients and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert m.hm_protocol.clients, "master never registered the client"
+    finally:
+        b.stop_all()
+        close.set()
     t.join(timeout=5)
 
     assert not m.hm_protocol.clients, (
