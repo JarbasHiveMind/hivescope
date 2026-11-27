@@ -65,7 +65,7 @@ def test_loopback_disconnect_callback_accepts_close_code():
         host, port = host_port.split(":")
         port = int(port.split("/")[0])
 
-        identity = NodeIdentity()
+        identity = NodeIdentity(app_name="hivescope-tests")
         identity.access_key = key
         identity.password = password
         identity.default_master = f"ws://{host}"
